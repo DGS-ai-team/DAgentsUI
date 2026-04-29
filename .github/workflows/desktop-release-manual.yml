@@ -68,7 +68,7 @@ jobs:
           if [ -f ".env.example" ]; then
             cp ".env.example" "${STAGE_DIR}/.env.example"
           fi
-          (cd release-stage && zip -r "${ARTIFACT_NAME}.zip" "${ARTIFACT_NAME}")
+          (cd "${STAGE_DIR}" && zip -r "../${ARTIFACT_NAME}.zip" .)
 
       - name: Prepare packaged artifact (Windows)
         if: runner.os == 'Windows'
@@ -82,7 +82,7 @@ jobs:
           if (Test-Path ".env.example") {
             Copy-Item ".env.example" -Destination (Join-Path $stageDir ".env.example") -Force
           }
-          Compress-Archive -Path $stageDir -DestinationPath (Join-Path $stageRoot "$artifactName.zip") -Force
+          Compress-Archive -Path (Join-Path $stageDir "*") -DestinationPath (Join-Path $stageRoot "$artifactName.zip") -Force
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
