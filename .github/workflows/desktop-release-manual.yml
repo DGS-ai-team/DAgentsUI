@@ -1,0 +1,103 @@
+name: Desktop Release (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag (e.g. v0.1.0). 留空则仅构建并上传 artifacts"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-desktop:
+    name: Manual Build (${{ matrix.platform.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: linux-x64
+            runner: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+          - name: windows-x64
+            runner: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+          - name: macos-arm64
+            runner: macos-latest
+            rust_target: aarch64-apple-darwin
+
+    runs-on: ${{ matrix.platform.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform.rust_target }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri bundles
+        run: pnpm tauri build
+
+      - name: Prepare packaged artifact (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARTIFACT_NAME="DAgents-${{ matrix.platform.name }}-${{ github.sha }}"
+          STAGE_DIR="release-stage/${ARTIFACT_NAME}"
+          mkdir -p "${STAGE_DIR}"
+          cp -R src-tauri/target/release/bundle "${STAGE_DIR}/"
+          if [ -f ".env.example" ]; then
+            cp ".env.example" "${STAGE_DIR}/.env.example"
+          fi
+          (cd release-stage && zip -r "${ARTIFACT_NAME}.zip" "${ARTIFACT_NAME}")
+
+      - name: Prepare packaged artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $artifactName = "DAgents-${{ matrix.platform.name }}-${{ github.sha }}"
+          $stageRoot = "release-stage"
+          $stageDir = Join-Path $stageRoot $artifactName
+          New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
+          Copy-Item "src-tauri/target/release/bundle" -Destination (Join-Path $stageDir "bundle") -Recurse -Force
+          if (Test-Path ".env.example") {
+            Copy-Item ".env.example" -Destination (Join-Path $stageDir ".env.example") -Force
+          }
+          Compress-Archive -Path $stageDir -DestinationPath (Join-Path $stageRoot "$artifactName.zip") -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DAgents-${{ matrix.platform.name }}
+          path: release-stage/*.zip
+
+      - name: Publish Release Assets
+        if: ${{ github.event.inputs.release_tag != '' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag }}
+          files: release-stage/*.zip
