@@ -1,7 +1,9 @@
 name: Desktop CI/CD
 
 on:
-  pull_request:
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: read
