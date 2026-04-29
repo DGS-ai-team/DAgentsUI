@@ -44,8 +44,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build Tauri executable
-        run: pnpm tauri build --bundles none
+      - name: Build frontend assets
+        run: pnpm build
+
+      - name: Build desktop executable
+        run: cargo build --manifest-path src-tauri/Cargo.toml --release
 
       - name: Prepare packaged artifact (Unix)
         if: runner.os != 'Windows'
@@ -55,7 +58,7 @@ jobs:
           ARTIFACT_NAME="DAgents-${{ matrix.platform.name }}-${{ github.sha }}"
           STAGE_DIR="release-stage/${ARTIFACT_NAME}"
           mkdir -p "${STAGE_DIR}"
-          cp "src-tauri/target/release/app" "${STAGE_DIR}/DAgents"
+          cp "src-tauri/target/release/DAgents" "${STAGE_DIR}/DAgents"
           chmod +x "${STAGE_DIR}/DAgents"
           if [ -f ".env.example" ]; then
             cp ".env.example" "${STAGE_DIR}/.env.example"
@@ -70,7 +73,7 @@ jobs:
           $stageRoot = "release-stage"
           $stageDir = Join-Path $stageRoot $artifactName
           New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
-          Copy-Item "src-tauri/target/release/app.exe" -Destination (Join-Path $stageDir "DAgents.exe") -Force
+          Copy-Item "src-tauri/target/release/DAgents.exe" -Destination (Join-Path $stageDir "DAgents.exe") -Force
           if (Test-Path ".env.example") {
             Copy-Item ".env.example" -Destination (Join-Path $stageDir ".env.example") -Force
           }
