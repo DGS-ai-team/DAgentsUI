@@ -65,6 +65,9 @@ jobs:
           mkdir -p "${STAGE_DIR}"
           cp "src-tauri/target/release/DAgents" "${STAGE_DIR}/DAgents"
           chmod +x "${STAGE_DIR}/DAgents"
+          if [ -f "README.md" ]; then
+            cp "README.md" "${STAGE_DIR}/README.md"
+          fi
           if [ -f ".env.example" ]; then
             cp ".env.example" "${STAGE_DIR}/.env.example"
           fi
@@ -79,6 +82,9 @@ jobs:
           $stageDir = Join-Path $stageRoot $artifactName
           New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
           Copy-Item "src-tauri/target/release/DAgents.exe" -Destination (Join-Path $stageDir "DAgents.exe") -Force
+          if (Test-Path "README.md") {
+            Copy-Item "README.md" -Destination (Join-Path $stageDir "README.md") -Force
+          }
           if (Test-Path ".env.example") {
             Copy-Item ".env.example" -Destination (Join-Path $stageDir ".env.example") -Force
           }
