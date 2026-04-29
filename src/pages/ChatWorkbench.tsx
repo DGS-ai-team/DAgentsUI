@@ -20,8 +20,13 @@ import type {
 const resolvedApiBaseUrl = String(import.meta.env.VITE_API_BASE_URL ?? "").trim();
 const defaultApiBaseUrl = "http://127.0.0.1:8000";
 
-const DEFAULT_SESSION_ID = "s-web";
+const DEFAULT_SESSION_ID = "main";
 
+/**
+ * 统一的页面级日志函数。
+ * - 自动附加 ISO 时间戳，便于在浏览器控制台串联一次请求生命周期
+ * - payload 可选，用于打印结构化上下文数据
+ */
 function wbLog(message: string, payload?: unknown): void {
   const now = new Date().toISOString();
   if (payload === undefined) {
@@ -31,6 +36,11 @@ function wbLog(message: string, payload?: unknown): void {
   }
 }
 
+/**
+ * 生成一条标准聊天消息对象。
+ * - id 使用 role + 时间戳 + 随机串，降低前端去重冲突概率
+ * - requestId 用于把同一轮请求中的增量消息、工具结果关联到一起
+ */
 function createMessage(
   sessionId: string,
   role: ChatMessage["role"],
@@ -47,6 +57,11 @@ function createMessage(
   };
 }
 
+/**
+ * 生成工具执行摘要文本，用于工具气泡的首行展示。
+ * - running/rejected/error 走固定文案
+ * - success 时会对返回文本做压缩和截断，避免 UI 被长内容撑开
+ */
 function buildToolExecutionSummary(
   toolName: string,
   status: "running" | "success" | "rejected" | "error",
@@ -71,6 +86,11 @@ function buildToolExecutionSummary(
   return `${name}：${clipped}`;
 }
 
+/**
+ * 规范化后端返回的 display_type。
+ * - 仅允许约定枚举值
+ * - 非法值统一回退为 normal_text，避免渲染分支异常
+ */
 function normalizeDisplayType(value: unknown): ToolResultDisplayType {
   const raw = String(value ?? "").trim();
   if (raw === "terminal" || raw === "code" || raw === "normal_text" || raw === "image") {
@@ -79,6 +99,14 @@ function normalizeDisplayType(value: unknown): ToolResultDisplayType {
   return "normal_text";
 }
 
+function generateFallbackClientId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `client-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** 会话列表“新建”按钮图标。 */
 function IconPlus() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" className="session-action-icon">
@@ -87,6 +115,7 @@ function IconPlus() {
   );
 }
 
+/** 会话列表“编辑标题”按钮图标。 */
 function IconEdit() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" className="session-action-icon">
@@ -96,6 +125,7 @@ function IconEdit() {
   );
 }
 
+/** 会话列表“删除会话”按钮图标。 */
 function IconTrash() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" className="session-action-icon">
@@ -107,9 +137,23 @@ function IconTrash() {
   );
 }
 
+/**
+ * 主工作台组件。
+ * 职责：
+ * 1) 维护会话/消息/审批/子代理线程等页面状态
+ * 2) 建立并消费 SSE 事件流
+ * 3) 编排消息发送、工具审批、会话管理等交互
+ */
 export function ChatWorkbench() {
+  // 当前生效的后端 API 地址（启动后会用运行时配置覆盖）。
   const [apiBaseUrl, setApiBaseUrl] = useState<string>(resolvedApiBaseUrl || defaultApiBaseUrl);
+  // API 地址是否已经完成启动期解析。
   const [apiReady, setApiReady] = useState(false);
+  // 当前客户端唯一标识（用于 SSE 过滤与请求归属）。
+  const [clientId, setClientId] = useState<string>("");
+  // clientId 是否已就绪，未就绪时不发起依赖 clientId 的请求。
+  const [clientReady, setClientReady] = useState(false);
+  // API 客户端实例；仅在 apiBaseUrl 变化时重建。
   const api = useMemo(
     () =>
       new DAgentsApiClient({
@@ -117,31 +161,37 @@ export function ChatWorkbench() {
       }),
     [apiBaseUrl],
   );
-  const [clientId] = useState<string>(() => {
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-      return crypto.randomUUID();
-    } else {
-      return `client-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    }
-  });
+  // 会话 ID 列表（包含默认会话与用户新建会话）。
   const [sessionIds, setSessionIds] = useState<string[]>([]);
+  // 当前激活（右侧主面板展示）的会话 ID。
   const [activeSessionId, setActiveSessionId] = useState<string>("");
+  // 按会话维度存储消息列表。
   const [messagesBySession, setMessagesBySession] = useState<Record<string, ChatMessage[]>>({});
+  // 按会话维度存储待审批工具任务。
   const [approvalsBySession, setApprovalsBySession] = useState<Record<string, ApprovalTask[]>>({});
+  // 按会话维度存储工具执行记录（running/success/error 等）。
   const [toolExecutionsBySession, setToolExecutionsBySession] = useState<Record<string, ToolExecutionRecord[]>>(
     {},
   );
+  // 按会话维度存储子代理线程列表。
   const [threadsBySession, setThreadsBySession] = useState<Record<string, SubAgentThread[]>>({});
+  // 按会话维度记录当前选中的子线程 ID。
   const [activeThreadBySession, setActiveThreadBySession] = useState<Record<string, string | undefined>>({});
+  // 按会话维度记录“审批提交中”的 tool_call ID 列表（用于按钮 loading 态）。
   const [submittingToolCallIdsBySession, setSubmittingToolCallIdsBySession] = useState<Record<string, string[]>>(
     {},
   );
+  // 按会话维度记录“正在执行”的 tool_call ID 列表。
   const [runningToolCallIdsBySession, setRunningToolCallIdsBySession] = useState<Record<string, string[]>>({});
+  // 按会话维度记录“已完成”的 tool_call ID 列表。
   const [completedToolCallIdsBySession, setCompletedToolCallIdsBySession] = useState<Record<string, string[]>>(
     {},
   );
+  // 按会话维度标记“发送消息中”状态。
   const [sendingBySession, setSendingBySession] = useState<Record<string, boolean>>({});
+  // 按会话维度记录运行态（status/usage/errorMessage）。
   const [runtimeBySession, setRuntimeBySession] = useState<Record<string, RuntimeState>>({});
+  // 运行态兜底模型：当会话还没初始化运行态时使用。
   const [defaultRuntimeModel] = useState<RuntimeState>({
     status: "idle",
     usage: {
@@ -149,28 +199,47 @@ export function ChatWorkbench() {
       outputTokens: 0,
       totalTokens: 0,
     },
-    model: "gpt-4.1",
   });
+  // 按会话维度记录最近一次错误（展示在 UI）。
   const [latestErrorBySession, setLatestErrorBySession] = useState<Record<string, string | undefined>>({});
+  // 会话标题映射表（支持用户重命名）。
   const [sessionTitleById, setSessionTitleById] = useState<Record<string, string>>({});
+  // 当前正在编辑标题的会话 ID。
   const [editingSessionId, setEditingSessionId] = useState<string>("");
+  // 标题编辑输入框草稿。
   const [editingTitleDraft, setEditingTitleDraft] = useState<string>("");
+  // 全局 SSE 连接状态（用于状态面板显示）。
   const [sseConnected, setSseConnected] = useState(false);
+  // 全局 EventSource 实例引用（避免重复创建）。
   const globalStreamRef = useRef<EventSource | null>(null);
+  // 已处理事件序号集合（用于 SSE 去重）。
   const seenEventSeqRef = useRef<Set<string>>(new Set());
+  // 每个会话当前流式轮次计数（用于拼接增量内容时区分轮次）。
   const streamTurnBySessionRef = useRef<Record<string, number>>({});
 
+  // 当前会话对应的消息列表（无则为空数组）。
   const activeMessages = messagesBySession[activeSessionId] ?? [];
+  // 当前会话对应的审批任务（无则为空数组）。
   const activeApprovals = approvalsBySession[activeSessionId] ?? [];
+  // 当前会话对应的工具执行记录（无则为空数组）。
   const activeToolExecutions = toolExecutionsBySession[activeSessionId] ?? [];
+  // 当前会话对应的子代理线程列表（无则为空数组）。
   const activeThreads = threadsBySession[activeSessionId] ?? [];
+  // 当前会话选中的子线程 ID。
   const activeThreadId = activeThreadBySession[activeSessionId];
+  // 当前会话运行态（无则使用默认运行态）。
   const activeRuntime = runtimeBySession[activeSessionId] ?? defaultRuntimeModel;
+  // 当前会话最近错误文本。
   const activeLatestError = latestErrorBySession[activeSessionId];
+  // 当前会话“审批提交中”的工具调用 ID 列表。
   const activeSubmittingToolCallIds = submittingToolCallIdsBySession[activeSessionId] ?? [];
+  // 当前会话“执行中”的工具调用 ID 列表。
   const activeRunningToolCallIds = runningToolCallIdsBySession[activeSessionId] ?? [];
+  // 当前会话“已完成”的工具调用 ID 列表。
   const activeCompletedToolCallIds = completedToolCallIdsBySession[activeSessionId] ?? [];
+  // 当前会话是否处于“发送请求中”。
   const activeSending = sendingBySession[activeSessionId] ?? false;
+  // 会话历史展示顺序：默认会话固定在最前，其余按创建逆序展示。
   const sessionHistory = useMemo(() => {
     const hasDefaultSession = sessionIds.includes(DEFAULT_SESSION_ID);
     const others = sessionIds.filter((sid) => sid !== DEFAULT_SESSION_ID).reverse();
@@ -181,6 +250,10 @@ export function ChatWorkbench() {
     }
   }, [sessionIds]);
 
+  /**
+   * 获取会话展示标题。
+   * 优先级：用户自定义标题 > 默认会话名 > 自动序号标题。
+   */
   const getSessionTitle = (sid: string): string => {
     const custom = (sessionTitleById[sid] ?? "").trim();
     if (custom) {
@@ -197,6 +270,10 @@ export function ChatWorkbench() {
     }
   };
 
+  /**
+   * 确保某个 session 在各类状态表中已初始化。
+   * 该函数用于处理“后端先推事件、前端还未建本地会话槽位”的情况。
+   */
   const ensureSessionSlot = (sid: string) => {
     setSessionIds((prev) => (prev.includes(sid) ? prev : [...prev, sid]));
     setSessionTitleById((prev) => {
@@ -217,7 +294,6 @@ export function ChatWorkbench() {
           [sid]: {
             status: "idle",
             usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-            model: defaultRuntimeModel.model,
           },
         };
       }
@@ -231,17 +307,31 @@ export function ChatWorkbench() {
 
   useEffect(() => {
     let cancelled = false;
+    /**
+     * 启动时确定最终 API Base URL。
+     * 优先读取 Tauri 运行时配置（可执行文件目录 .env），失败时回退到构建期 env。
+     */
     const bootstrapApiBaseUrl = async () => {
       let runtimeApiBaseUrl = "";
+      let runtimeClientId = "";
       try {
         const value = await invoke<string | null>("get_runtime_api_base_url");
         runtimeApiBaseUrl = String(value ?? "").trim();
       } catch {
         // 浏览器模式或未注册命令时，回退到构建期配置。
       }
+      try {
+        const value = await invoke<string>("get_or_create_client_id");
+        runtimeClientId = String(value ?? "").trim();
+      } catch {
+        // 浏览器模式或未注册命令时，回退到前端本地生成。
+      }
       const nextApiBaseUrl = runtimeApiBaseUrl || resolvedApiBaseUrl || defaultApiBaseUrl;
+      const nextClientId = runtimeClientId || generateFallbackClientId();
       if (!cancelled) {
         setApiBaseUrl(nextApiBaseUrl);
+        setClientId(nextClientId);
+        setClientReady(true);
         setApiReady(true);
       }
     };
@@ -251,6 +341,10 @@ export function ChatWorkbench() {
     };
   }, []);
 
+  /**
+   * 向指定会话末尾追加一条消息。
+   * 这是所有“新增消息”路径的统一写入口，便于后续统一做去重/限长策略。
+   */
   const appendMessageForSession = (sid: string, message: ChatMessage) => {
     setMessagesBySession((prev) => {
       const current = prev[sid] ?? [];
@@ -258,6 +352,10 @@ export function ChatWorkbench() {
     });
   };
 
+  /**
+   * 对工具执行记录执行 upsert（存在则更新，不存在则追加）。
+   * 常用于工具从 running -> success/rejected/error 的状态推进。
+   */
   const upsertToolExecutionForSession = (sid: string, item: ToolExecutionRecord) => {
     setToolExecutionsBySession((prev) => {
       const current = prev[sid] ?? [];
@@ -272,6 +370,11 @@ export function ChatWorkbench() {
     });
   };
 
+  /**
+   * 删除会话及其关联状态。
+   * - 默认会话不可删除
+   * - 删除时会同步清理消息、审批、线程、运行态等所有 session 维度状态
+   */
   const handleDeleteSession = (sid: string) => {
     if (sid === DEFAULT_SESSION_ID) {
       wbLog("session:delete:blocked-default", { sessionId: sid });
@@ -360,11 +463,16 @@ export function ChatWorkbench() {
     wbLog("session:delete:done", { sessionId: sid });
   };
 
+  /** 进入会话标题编辑态，并预填当前标题。 */
   const handleStartEditSessionTitle = (sid: string) => {
     setEditingSessionId(sid);
     setEditingTitleDraft(getSessionTitle(sid));
   };
 
+  /**
+   * 提交会话标题编辑。
+   * 空标题会被视为取消编辑（不落库、不更新显示名）。
+   */
   const handleCommitEditSessionTitle = (sid: string) => {
     const nextTitle = editingTitleDraft.trim();
     if (!nextTitle) {
@@ -379,7 +487,7 @@ export function ChatWorkbench() {
   };
 
   useEffect(() => {
-    if (!apiReady) {
+    if (!apiReady || !clientReady || !clientId) {
       return;
     }
     wbLog("bootstrap:start", {
@@ -436,13 +544,17 @@ export function ChatWorkbench() {
         return;
       }
     };
-  }, [api, apiBaseUrl, apiReady, clientId]);
+  }, [api, apiBaseUrl, apiReady, clientId, clientReady]);
 
   const activeThread = useMemo(
     () => activeThreads.find((item) => item.id === activeThreadId) || null,
     [activeThreadId, activeThreads],
   );
 
+  /**
+   * 处理 assistant/reasoning 的流式增量消息。
+   * 同一 requestId + role 会合并到最后一条消息，避免每个 delta 生成单独气泡。
+   */
   const appendStreamingMessage = (
     sid: string,
     role: ChatMessage["role"],
@@ -487,6 +599,10 @@ export function ChatWorkbench() {
       // stream exists
     }
 
+    /**
+     * SSE 事件主分发器。
+     * 按事件类型更新对应状态（消息、工具执行、审批、用量、子代理线程等）。
+     */
     const onEvent = (eventType: string, envelope: Record<string, unknown>) => {
       const sid = String(envelope.session_id ?? "").trim();
       const turnIndex = streamTurnBySessionRef.current[sid] ?? 0;
@@ -710,6 +826,12 @@ export function ChatWorkbench() {
       }
     };
 
+    /**
+     * 解析原始 SSE 数据并做基础防护：
+     * - 按 client_id 过滤非当前客户端事件
+     * - 按 seq 去重，避免重连后重复渲染
+     * - 解析失败时记录日志而不中断主流程
+     */
     const parseAndDispatch = (eventType: string, rawData: string) => {
       try {
         const parsed = JSON.parse(rawData) as {
@@ -801,6 +923,7 @@ export function ChatWorkbench() {
     };
   }, [clientId, defaultRuntimeModel]);
 
+  /** 创建新会话并切换到该会话。 */
   const handleCreateSession = async () => {
     try {
       const result = await api.createSession({});
@@ -812,7 +935,17 @@ export function ChatWorkbench() {
     }
   };
 
+  /**
+   * 发送用户消息。
+   * - 前置写入用户消息气泡与运行态
+   * - 调用后端 submitMessage
+   * - 真实 assistant 回复由 SSE 异步回流更新
+   */
   const handleSendMessage = async (content: string) => {
+    if (!clientReady || !clientId) {
+      wbLog("sendMessage:skip-client-not-ready");
+      return;
+    }
     const sid = activeSessionId;
     if (!sid) {
       wbLog("sendMessage:skip-no-active-session");
@@ -864,11 +997,19 @@ export function ChatWorkbench() {
     }
   };
 
+  /**
+   * 提交工具审批决策（approve/reject）。
+   * 会同步更新审批列表、工具执行状态和运行态，并在失败时回滚提交中标记。
+   */
   const handleToolDecision = async (
     taskId: string,
     toolCallId: string,
     decision: ToolCallDecision,
   ) => {
+    if (!clientReady || !clientId) {
+      wbLog("toolDecision:skip-client-not-ready");
+      return;
+    }
     const sid = activeSessionId;
     if (!sid) {
       return;
