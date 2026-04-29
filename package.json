@@ -10,6 +10,7 @@
     "gen:types": "node ./scripts/generate-openapi-types.mjs ./openapi.json ./src/api/types.ts"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.8.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

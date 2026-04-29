@@ -1,10 +1,12 @@
 # dependencies
 node_modules/
+.pnpm-store/
 
 # build outputs
 dist/
 .vite/
 *.tsbuildinfo
+release-stage/
 
 # logs
 *.log
@@ -27,3 +29,6 @@ Thumbs.db
 # tauri / rust
 src-tauri/target/
 src-tauri/gen/schemas
+
+# rust tooling
+**/*.rs.bk

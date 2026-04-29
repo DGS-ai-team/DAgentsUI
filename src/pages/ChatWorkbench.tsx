@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 import { DAgentsApiClient } from "../api/client";
 import { MainChatPanel } from "../components/MainChatPanel";
@@ -17,9 +18,7 @@ import type {
 } from "../ui-contracts";
 
 const resolvedApiBaseUrl = String(import.meta.env.VITE_API_BASE_URL ?? "").trim();
-const api = new DAgentsApiClient({
-  baseUrl: resolvedApiBaseUrl || "http://127.0.0.1:8000",
-});
+const defaultApiBaseUrl = "http://127.0.0.1:8000";
 
 const DEFAULT_SESSION_ID = "s-web";
 
@@ -109,6 +108,15 @@ function IconTrash() {
 }
 
 export function ChatWorkbench() {
+  const [apiBaseUrl, setApiBaseUrl] = useState<string>(resolvedApiBaseUrl || defaultApiBaseUrl);
+  const [apiReady, setApiReady] = useState(false);
+  const api = useMemo(
+    () =>
+      new DAgentsApiClient({
+        baseUrl: apiBaseUrl,
+      }),
+    [apiBaseUrl],
+  );
   const [clientId] = useState<string>(() => {
     if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
       return crypto.randomUUID();
@@ -220,6 +228,28 @@ export function ChatWorkbench() {
       // keep current active tab
     }
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    const bootstrapApiBaseUrl = async () => {
+      let runtimeApiBaseUrl = "";
+      try {
+        const value = await invoke<string | null>("get_runtime_api_base_url");
+        runtimeApiBaseUrl = String(value ?? "").trim();
+      } catch {
+        // 浏览器模式或未注册命令时，回退到构建期配置。
+      }
+      const nextApiBaseUrl = runtimeApiBaseUrl || resolvedApiBaseUrl || defaultApiBaseUrl;
+      if (!cancelled) {
+        setApiBaseUrl(nextApiBaseUrl);
+        setApiReady(true);
+      }
+    };
+    void bootstrapApiBaseUrl();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const appendMessageForSession = (sid: string, message: ChatMessage) => {
     setMessagesBySession((prev) => {
@@ -349,9 +379,12 @@ export function ChatWorkbench() {
   };
 
   useEffect(() => {
+    if (!apiReady) {
+      return;
+    }
     wbLog("bootstrap:start", {
       configuredApiBaseUrl: resolvedApiBaseUrl,
-      effectiveApiBaseUrl: resolvedApiBaseUrl || "http://127.0.0.1:8000",
+      effectiveApiBaseUrl: apiBaseUrl,
     });
     let mounted = true;
     void api
@@ -403,7 +436,7 @@ export function ChatWorkbench() {
         return;
       }
     };
-  }, [clientId]);
+  }, [api, apiBaseUrl, apiReady, clientId]);
 
   const activeThread = useMemo(
     () => activeThreads.find((item) => item.id === activeThreadId) || null,
@@ -790,7 +823,7 @@ export function ChatWorkbench() {
     wbLog("sendMessage:called", {
       rawContentLength: content.length,
       sessionId: sid,
-      effectiveApiBaseUrl: resolvedApiBaseUrl || "http://127.0.0.1:8000",
+      effectiveApiBaseUrl: apiBaseUrl,
     });
     const text = content.trim();
     if (!text) {
