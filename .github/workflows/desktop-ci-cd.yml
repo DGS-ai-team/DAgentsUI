@@ -1,4 +1,4 @@
-name: Desktop CI/CD
+name: Desktop CI/CD (Electron)
 
 on:
   push:
@@ -17,10 +17,8 @@ jobs:
         platform:
           - name: windows-x64
             runner: windows-latest
-            rust_target: x86_64-pc-windows-msvc
           - name: macos-arm64
             runner: macos-latest
-            rust_target: aarch64-apple-darwin
 
     runs-on: ${{ matrix.platform.runner }}
 
@@ -38,19 +36,14 @@ jobs:
         with:
           version: 10
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.platform.rust_target }}
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Build frontend assets
         run: pnpm build
 
-      - name: Build desktop executable
-        run: cargo build --manifest-path src-tauri/Cargo.toml --release
+      - name: Verify Electron runtime
+        run: pnpm exec electron --version
 
       - name: Prepare packaged artifact (Unix)
         if: runner.os != 'Windows'
@@ -60,8 +53,10 @@ jobs:
           ARTIFACT_NAME="DAgents-${{ matrix.platform.name }}-${{ github.sha }}"
           STAGE_DIR="release-stage/${ARTIFACT_NAME}"
           mkdir -p "${STAGE_DIR}"
-          cp "src-tauri/target/release/DAgents" "${STAGE_DIR}/DAgents"
-          chmod +x "${STAGE_DIR}/DAgents"
+          cp -r dist "${STAGE_DIR}/dist"
+          cp -r electron "${STAGE_DIR}/electron"
+          cp package.json "${STAGE_DIR}/package.json"
+          cp pnpm-lock.yaml "${STAGE_DIR}/pnpm-lock.yaml"
           if [ -f "README.md" ]; then
             cp "README.md" "${STAGE_DIR}/README.md"
           fi
@@ -78,7 +73,10 @@ jobs:
           $stageRoot = "release-stage"
           $stageDir = Join-Path $stageRoot $artifactName
           New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
-          Copy-Item "src-tauri/target/release/DAgents.exe" -Destination (Join-Path $stageDir "DAgents.exe") -Force
+          Copy-Item "dist" -Destination (Join-Path $stageDir "dist") -Recurse -Force
+          Copy-Item "electron" -Destination (Join-Path $stageDir "electron") -Recurse -Force
+          Copy-Item "package.json" -Destination (Join-Path $stageDir "package.json") -Force
+          Copy-Item "pnpm-lock.yaml" -Destination (Join-Path $stageDir "pnpm-lock.yaml") -Force
           if (Test-Path "README.md") {
             Copy-Item "README.md" -Destination (Join-Path $stageDir "README.md") -Force
           }

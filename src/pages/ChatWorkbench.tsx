@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 
 import { DAgentsApiClient } from "../api/client";
 import { MainChatPanel } from "../components/MainChatPanel";
@@ -309,23 +308,11 @@ export function ChatWorkbench() {
     let cancelled = false;
     /**
      * 启动时确定最终 API Base URL。
-     * 优先读取 Tauri 运行时配置（可执行文件目录 .env），失败时回退到构建期 env。
+     * 优先读取 Electron 运行时配置（项目根目录 .env），失败时回退到构建期 env。
      */
     const bootstrapApiBaseUrl = async () => {
-      let runtimeApiBaseUrl = "";
-      let runtimeClientId = "";
-      try {
-        const value = await invoke<string | null>("get_runtime_api_base_url");
-        runtimeApiBaseUrl = String(value ?? "").trim();
-      } catch {
-        // 浏览器模式或未注册命令时，回退到构建期配置。
-      }
-      try {
-        const value = await invoke<string>("get_or_create_client_id");
-        runtimeClientId = String(value ?? "").trim();
-      } catch {
-        // 浏览器模式或未注册命令时，回退到前端本地生成。
-      }
+      const runtimeApiBaseUrl = String(window.electronRuntime?.getRuntimeApiBaseUrl?.() ?? "").trim();
+      const runtimeClientId = String(window.electronRuntime?.getOrCreateClientId?.() ?? "").trim();
       const nextApiBaseUrl = runtimeApiBaseUrl || resolvedApiBaseUrl || defaultApiBaseUrl;
       const nextClientId = runtimeClientId || generateFallbackClientId();
       if (!cancelled) {
@@ -731,6 +718,10 @@ export function ChatWorkbench() {
       } else if (eventType === "error") {
         streamTurnBySessionRef.current[sid] = (streamTurnBySessionRef.current[sid] ?? 0) + 1;
         const message = typeof payload.message === "string" ? payload.message : "运行异常";
+        // 当前轮次已异常终止，未处理的审批已失效，避免 UI 继续显示“待审批”。
+        setApprovalsBySession((prev) => ({ ...prev, [sid]: [] }));
+        setSubmittingToolCallIdsBySession((prev) => ({ ...prev, [sid]: [] }));
+        setRunningToolCallIdsBySession((prev) => ({ ...prev, [sid]: [] }));
         setLatestErrorBySession((prev) => ({ ...prev, [sid]: message }));
         setRuntimeBySession((prev) => ({
           ...prev,
@@ -739,6 +730,8 @@ export function ChatWorkbench() {
         setSendingBySession((prev) => ({ ...prev, [sid]: false }));
       } else if (eventType === "done") {
         streamTurnBySessionRef.current[sid] = (streamTurnBySessionRef.current[sid] ?? 0) + 1;
+        // 当前轮次结束后，残留审批应失效并清空，防止出现不可操作的待审批数量。
+        setApprovalsBySession((prev) => ({ ...prev, [sid]: [] }));
         setRuntimeBySession((prev) => ({
           ...prev,
           [sid]: { ...(prev[sid] ?? defaultRuntimeModel), status: "done" },

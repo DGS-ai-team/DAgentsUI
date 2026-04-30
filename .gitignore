@@ -26,9 +26,5 @@ Thumbs.db
 .idea/
 .vscode/
 
-# tauri / rust
-src-tauri/target/
-src-tauri/gen/schemas
-
-# rust tooling
-**/*.rs.bk
+# electron runtime cache
+.electron-client-id

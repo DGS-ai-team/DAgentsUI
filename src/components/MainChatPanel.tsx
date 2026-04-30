@@ -11,20 +11,28 @@ import { ApprovalToolBubble } from "./ApprovalToolBubble";
 import { ToolExecutionBubble } from "./ToolExecutionBubble";
 
 const ROLE_HINT: Partial<Record<MessageRole, string>> = {
-  user: "you",
   reasoning: "thinking",
   tool: "tool",
   system: "system",
 };
 
+function normalizeBubbleContent(message: ChatMessage): string {
+  const raw = String(message.content ?? "").replace(/\r\n/g, "\n");
+  if (message.role === "assistant" || message.role === "reasoning") {
+    return raw.replace(/^\n+/, "").replace(/\n+$/, "");
+  }
+  return raw;
+}
+
 function MessageBubble({ message }: { message: ChatMessage }) {
   const hint = ROLE_HINT[message.role];
+  const content = normalizeBubbleContent(message);
   if (message.role === "tool") {
     return (
       <div className="msg msg--tool-centered">
         <div className="msg__body msg__body--wide">
           {hint ? <div className="msg__hint">{hint}</div> : null}
-          <div className="msg__bubble msg__bubble--tool-centered">{message.content}</div>
+          <div className="msg__bubble msg__bubble--tool-centered">{content}</div>
         </div>
       </div>
     );
@@ -34,7 +42,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
     <div className={`msg msg--${message.role}`}>
       <div className="msg__body">
         {hint ? <div className="msg__hint">{hint}</div> : null}
-        <div className="msg__bubble">{message.content}</div>
+        <div className="msg__bubble">{content}</div>
       </div>
     </div>
   );
