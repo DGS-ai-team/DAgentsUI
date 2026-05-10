@@ -30,7 +30,7 @@ DAgentsUI/
 ├── index.html
 ├── .env.example                 # 环境变量模板（复制为 .env / .env.local）
 ├── openapi.json                 # API 契约快照（与后端导出对齐后执行 gen:types）
-├── public/                      # 静态资源（见 public/README.md）
+├── public/                      # 静态资源（favicon 等，不经打包直接拷贝到 dist）
 ├── scripts/                     # 类型生成、Electron 开发脚本等（见 scripts/README.md）
 ├── electron/                    # Electron 主进程与 preload
 ├── src/                         # 前端源码（见 src/README.md）
@@ -132,7 +132,6 @@ pnpm preview
 - [src/README.md](src/README.md)
 - [src/api/README.md](src/api/README.md)
 - [scripts/README.md](scripts/README.md)
-- [public/README.md](public/README.md)
 
 ## License
 

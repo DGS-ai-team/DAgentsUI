@@ -1,4 +1,4 @@
-const { contextBridge } = require("electron");
+const { contextBridge, ipcRenderer } = require("electron");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -47,4 +47,9 @@ function getOrCreateClientId() {
 contextBridge.exposeInMainWorld("electronRuntime", {
   getRuntimeApiBaseUrl: () => readRuntimeApiBaseUrl(),
   getOrCreateClientId: () => getOrCreateClientId(),
+  readUserSettings: () => ipcRenderer.invoke("settings:read"),
+  writeUserSettings: (patch) => ipcRenderer.invoke("settings:write", patch),
+  getUserSettingsFilePath: () => ipcRenderer.invoke("settings:path"),
+  setProxyTarget: (url) => ipcRenderer.invoke("proxy:setTarget", url),
+  getLocalApiProxyBaseUrl: () => ipcRenderer.invoke("proxy:getBaseUrl"),
 });

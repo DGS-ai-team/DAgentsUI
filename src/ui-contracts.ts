@@ -35,6 +35,12 @@ export interface ChatMessage extends UiMeta {
   content: string;
   partial?: boolean;
   error?: string;
+  /** 请求已提交但还未收到首个 SSE 内容块时显示 generating 占位 */
+  generatingPending?: boolean;
+  /** 为 true 时不流式展示 reasoning 全文，仅显示占位「thinking」+ 动画 */
+  reasoningCollapsed?: boolean;
+  /** 推理阶段尚未结束时为 true，用于控制等待动画 */
+  reasoningPhaseActive?: boolean;
 }
 
 export interface ToolCallItem {

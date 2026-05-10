@@ -5,6 +5,9 @@ import { MainChatPanel } from "../components/MainChatPanel";
 import { RuntimeStatusPanel } from "../components/RuntimeStatusPanel";
 import { SubAgentThreadTabs } from "../components/SubAgentThreadTabs";
 import { SubAgentThreadView } from "../components/SubAgentThreadView";
+import { useSettings } from "../settings/SettingsContext";
+import { omitSessionKey } from "../utils/omitSessionKey";
+import { resolveWorkbenchApiBase } from "./chatWorkbench/resolveApiBaseUrl";
 import type {
   ApprovalTask,
   ChatMessage,
@@ -98,13 +101,6 @@ function normalizeDisplayType(value: unknown): ToolResultDisplayType {
   return "normal_text";
 }
 
-function generateFallbackClientId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `client-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
 /** 会话列表“新建”按钮图标。 */
 function IconPlus() {
   return (
@@ -136,6 +132,16 @@ function IconTrash() {
   );
 }
 
+/** 打开设置页 */
+function IconSettings() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="session-action-icon">
+      <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.6 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.6 1Z" />
+    </svg>
+  );
+}
+
 /**
  * 主工作台组件。
  * 职责：
@@ -143,7 +149,7 @@ function IconTrash() {
  * 2) 建立并消费 SSE 事件流
  * 3) 编排消息发送、工具审批、会话管理等交互
  */
-export function ChatWorkbench() {
+export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void }) {
   // 当前生效的后端 API 地址（启动后会用运行时配置覆盖）。
   const [apiBaseUrl, setApiBaseUrl] = useState<string>(resolvedApiBaseUrl || defaultApiBaseUrl);
   // API 地址是否已经完成启动期解析。
@@ -215,6 +221,13 @@ export function ChatWorkbench() {
   const seenEventSeqRef = useRef<Set<string>>(new Set());
   // 每个会话当前流式轮次计数（用于拼接增量内容时区分轮次）。
   const streamTurnBySessionRef = useRef<Record<string, number>>({});
+  // 标记某个请求是否已经收到过服务端响应块，避免快速响应后补出过期 generating 占位。
+  const responseStartedByRequestRef = useRef<Set<string>>(new Set());
+  const { settings } = useSettings();
+  const showReasoningDetailRef = useRef(settings.showReasoningDetail);
+  useEffect(() => {
+    showReasoningDetailRef.current = settings.showReasoningDetail;
+  }, [settings.showReasoningDetail]);
 
   // 当前会话对应的消息列表（无则为空数组）。
   const activeMessages = messagesBySession[activeSessionId] ?? [];
@@ -242,11 +255,7 @@ export function ChatWorkbench() {
   const sessionHistory = useMemo(() => {
     const hasDefaultSession = sessionIds.includes(DEFAULT_SESSION_ID);
     const others = sessionIds.filter((sid) => sid !== DEFAULT_SESSION_ID).reverse();
-    if (hasDefaultSession) {
-      return [DEFAULT_SESSION_ID, ...others];
-    } else {
-      return others;
-    }
+    return hasDefaultSession ? [DEFAULT_SESSION_ID, ...others] : others;
   }, [sessionIds]);
 
   /**
@@ -257,16 +266,13 @@ export function ChatWorkbench() {
     const custom = (sessionTitleById[sid] ?? "").trim();
     if (custom) {
       return custom;
-    } else {
-      // no custom title
     }
     if (sid === DEFAULT_SESSION_ID) {
       return "默认对话";
-    } else {
-      const order = sessionIds.findIndex((item) => item === sid);
-      const displayOrder = order >= 0 ? order + 1 : 0;
-      return displayOrder > 0 ? `对话 ${displayOrder}` : "对话";
     }
+    const order = sessionIds.findIndex((item) => item === sid);
+    const displayOrder = order >= 0 ? order + 1 : 0;
+    return displayOrder > 0 ? `对话 ${displayOrder}` : "对话";
   };
 
   /**
@@ -278,51 +284,44 @@ export function ChatWorkbench() {
     setSessionTitleById((prev) => {
       if (sid in prev) {
         return prev;
-      } else if (sid === DEFAULT_SESSION_ID) {
-        return { ...prev, [sid]: "默认对话" };
-      } else {
-        return { ...prev, [sid]: "新对话" };
       }
+      if (sid === DEFAULT_SESSION_ID) {
+        return { ...prev, [sid]: "默认对话" };
+      }
+      return { ...prev, [sid]: "新对话" };
     });
     setRuntimeBySession((prev) => {
       if (sid in prev) {
         return prev;
-      } else {
-        return {
-          ...prev,
-          [sid]: {
-            status: "idle",
-            usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-          },
-        };
       }
+      return {
+        ...prev,
+        [sid]: {
+          status: "idle",
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        },
+      };
     });
     if (!activeSessionId) {
       setActiveSessionId(sid);
-    } else {
-      // keep current active tab
     }
   };
 
+  // ----- 启动：解析 API 基址、clientId，并在 Electron 下挂接内嵌代理 -----
   useEffect(() => {
     let cancelled = false;
-    /**
-     * 启动时确定最终 API Base URL。
-     * 优先读取 Electron 运行时配置（项目根目录 .env），失败时回退到构建期 env。
-     */
-    const bootstrapApiBaseUrl = async () => {
-      const runtimeApiBaseUrl = String(window.electronRuntime?.getRuntimeApiBaseUrl?.() ?? "").trim();
-      const runtimeClientId = String(window.electronRuntime?.getOrCreateClientId?.() ?? "").trim();
-      const nextApiBaseUrl = runtimeApiBaseUrl || resolvedApiBaseUrl || defaultApiBaseUrl;
-      const nextClientId = runtimeClientId || generateFallbackClientId();
+    void (async () => {
+      const result = await resolveWorkbenchApiBase({
+        resolvedViteUrl: resolvedApiBaseUrl,
+        log: wbLog,
+      });
       if (!cancelled) {
-        setApiBaseUrl(nextApiBaseUrl);
-        setClientId(nextClientId);
+        setApiBaseUrl(result.apiBaseUrl);
+        setClientId(result.clientId);
         setClientReady(true);
         setApiReady(true);
       }
-    };
-    void bootstrapApiBaseUrl();
+    })();
     return () => {
       cancelled = true;
     };
@@ -349,11 +348,10 @@ export function ChatWorkbench() {
       const index = current.findIndex((row) => row.id === item.id);
       if (index < 0) {
         return { ...prev, [sid]: [...current, item] };
-      } else {
-        const next = [...current];
-        next[index] = item;
-        return { ...prev, [sid]: next };
       }
+      const next = [...current];
+      next[index] = item;
+      return { ...prev, [sid]: next };
     });
   };
 
@@ -366,8 +364,6 @@ export function ChatWorkbench() {
     if (sid === DEFAULT_SESSION_ID) {
       wbLog("session:delete:blocked-default", { sessionId: sid });
       return;
-    } else {
-      // non-default sessions can be deleted
     }
     wbLog("session:delete:start", { sessionId: sid });
     setSessionIds((prev) => {
@@ -375,77 +371,26 @@ export function ChatWorkbench() {
       setActiveSessionId((current) => {
         if (current === sid) {
           return next[0] ?? "";
-        } else {
-          return current;
         }
+        return current;
       });
       return next;
     });
-    setSessionTitleById((prev) => {
-      const next = { ...prev };
-      delete next[sid];
-      return next;
-    });
-    setMessagesBySession((prev) => {
-      const next = { ...prev };
-      delete next[sid];
-      return next;
-    });
-    setApprovalsBySession((prev) => {
-      const next = { ...prev };
-      delete next[sid];
-      return next;
-    });
-    setToolExecutionsBySession((prev) => {
-      const next = { ...prev };
-      delete next[sid];
-      return next;
-    });
-    setThreadsBySession((prev) => {
-      const next = { ...prev };
-      delete next[sid];
-      return next;
-    });
-    setActiveThreadBySession((prev) => {
-      const next = { ...prev };
-      delete next[sid];
-      return next;
-    });
-    setSubmittingToolCallIdsBySession((prev) => {
-      const next = { ...prev };
-      delete next[sid];
-      return next;
-    });
-    setRunningToolCallIdsBySession((prev) => {
-      const next = { ...prev };
-      delete next[sid];
-      return next;
-    });
-    setCompletedToolCallIdsBySession((prev) => {
-      const next = { ...prev };
-      delete next[sid];
-      return next;
-    });
-    setSendingBySession((prev) => {
-      const next = { ...prev };
-      delete next[sid];
-      return next;
-    });
-    setRuntimeBySession((prev) => {
-      const next = { ...prev };
-      delete next[sid];
-      return next;
-    });
-    setLatestErrorBySession((prev) => {
-      const next = { ...prev };
-      delete next[sid];
-      return next;
-    });
+    setSessionTitleById((prev) => omitSessionKey(prev, sid));
+    setMessagesBySession((prev) => omitSessionKey(prev, sid));
+    setApprovalsBySession((prev) => omitSessionKey(prev, sid));
+    setToolExecutionsBySession((prev) => omitSessionKey(prev, sid));
+    setThreadsBySession((prev) => omitSessionKey(prev, sid));
+    setActiveThreadBySession((prev) => omitSessionKey(prev, sid));
+    setSubmittingToolCallIdsBySession((prev) => omitSessionKey(prev, sid));
+    setRunningToolCallIdsBySession((prev) => omitSessionKey(prev, sid));
+    setCompletedToolCallIdsBySession((prev) => omitSessionKey(prev, sid));
+    setSendingBySession((prev) => omitSessionKey(prev, sid));
+    setRuntimeBySession((prev) => omitSessionKey(prev, sid));
+    setLatestErrorBySession((prev) => omitSessionKey(prev, sid));
     if (editingSessionId === sid) {
       setEditingSessionId("");
       setEditingTitleDraft("");
-    } else {
-      // keep current editor state
     }
     wbLog("session:delete:done", { sessionId: sid });
   };
@@ -466,13 +411,13 @@ export function ChatWorkbench() {
       setEditingSessionId("");
       setEditingTitleDraft("");
       return;
-    } else {
-      setSessionTitleById((prev) => ({ ...prev, [sid]: nextTitle }));
-      setEditingSessionId("");
-      setEditingTitleDraft("");
     }
+    setSessionTitleById((prev) => ({ ...prev, [sid]: nextTitle }));
+    setEditingSessionId("");
+    setEditingTitleDraft("");
   };
 
+  // ----- 启动：默认会话 + 全局 SSE（单例 EventSource）-----
   useEffect(() => {
     if (!apiReady || !clientReady || !clientId) {
       return;
@@ -527,8 +472,6 @@ export function ChatWorkbench() {
         globalStreamRef.current.close();
         globalStreamRef.current = null;
         setSseConnected(false);
-      } else {
-        return;
       }
     };
   }, [api, apiBaseUrl, apiReady, clientId, clientReady]);
@@ -558,33 +501,89 @@ export function ChatWorkbench() {
           const merged: ChatMessage = {
             ...last,
             content: `${last.content}${deltaText}`,
+            reasoningPhaseActive: role === "reasoning" ? true : last.reasoningPhaseActive,
           };
           return {
             ...prev,
             [sid]: [...sessionMessages.slice(0, lastIndex), merged],
           };
         } else {
+          const message = createMessage(sid, role, deltaText, requestId);
           return {
             ...prev,
-            [sid]: [...sessionMessages, createMessage(sid, role, deltaText, requestId)],
+            [sid]: [...sessionMessages, role === "reasoning" ? { ...message, reasoningPhaseActive: true } : message],
           };
         }
       } else {
+        const message = createMessage(sid, role, deltaText, requestId);
         return {
           ...prev,
-          [sid]: [createMessage(sid, role, deltaText, requestId)],
+          [sid]: [role === "reasoning" ? { ...message, reasoningPhaseActive: true } : message],
         };
       }
     });
   };
 
+  // ----- 全局 SSE：事件分发（assistant / tool / 子线程等）-----
   useEffect(() => {
     const es = globalStreamRef.current;
     if (!es) {
       return;
-    } else {
-      // stream exists
     }
+
+    const finalizeCollapsedReasoningPhase = (sessionId: string, requestKey: string) => {
+      setMessagesBySession((prev) => {
+        const sessionMessages = prev[sessionId] ?? [];
+        let changed = false;
+        const next = sessionMessages.map((m) => {
+          if (
+            m.sessionId === sessionId &&
+            m.requestId === requestKey &&
+            m.role === "reasoning" &&
+            m.reasoningPhaseActive
+          ) {
+            changed = true;
+            return { ...m, reasoningPhaseActive: false };
+          }
+          return m;
+        });
+        return changed ? { ...prev, [sessionId]: next } : prev;
+      });
+    };
+
+    const appendCollapsedReasoningPlaceholder = (sessionId: string, requestKey: string) => {
+      setMessagesBySession((prev) => {
+        const sessionMessages = prev[sessionId] ?? [];
+        const last = sessionMessages[sessionMessages.length - 1];
+        if (
+          last &&
+          last.role === "reasoning" &&
+          last.requestId === requestKey &&
+          last.sessionId === sessionId &&
+          last.reasoningCollapsed
+        ) {
+          return prev;
+        }
+        const msg = createMessage(sessionId, "reasoning", "", requestKey);
+        const withFlags: ChatMessage = {
+          ...msg,
+          reasoningCollapsed: true,
+          reasoningPhaseActive: true,
+        };
+        return { ...prev, [sessionId]: [...sessionMessages, withFlags] };
+      });
+    };
+
+    const removeGeneratingPlaceholder = (sessionId: string, requestKey: string) => {
+      responseStartedByRequestRef.current.add(requestKey);
+      setMessagesBySession((prev) => {
+        const sessionMessages = prev[sessionId] ?? [];
+        const next = sessionMessages.filter(
+          (m) => !(m.sessionId === sessionId && m.requestId === requestKey && m.generatingPending),
+        );
+        return next.length === sessionMessages.length ? prev : { ...prev, [sessionId]: next };
+      });
+    };
 
     /**
      * SSE 事件主分发器。
@@ -606,11 +605,21 @@ export function ChatWorkbench() {
 
       if (eventType === "assistant" || eventType === "reasoning") {
         if (content) {
-          appendStreamingMessage(sid, eventType === "assistant" ? "assistant" : "reasoning", requestId, content);
+          removeGeneratingPlaceholder(sid, requestId);
+          if (eventType === "assistant") {
+            finalizeCollapsedReasoningPhase(sid, requestId);
+            appendStreamingMessage(sid, "assistant", requestId, content);
+          } else if (showReasoningDetailRef.current) {
+            appendStreamingMessage(sid, "reasoning", requestId, content);
+          } else {
+            appendCollapsedReasoningPlaceholder(sid, requestId);
+          }
         } else {
           return;
         }
       } else if (eventType === "tool_result") {
+        removeGeneratingPlaceholder(sid, requestId);
+        finalizeCollapsedReasoningPhase(sid, requestId);
         const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "tool";
         const toolCallId = typeof payload.tool_call_id === "string" ? payload.tool_call_id : "";
         const rejected = Boolean(payload.rejected);
@@ -670,9 +679,17 @@ export function ChatWorkbench() {
           });
         }
       } else if (eventType === "approval_required") {
-        const args = (payload.approval_args ?? {}) as { tool_calls?: ToolCallItem[] };
-        const toolCalls = Array.isArray(args.tool_calls) ? args.tool_calls : [];
+        removeGeneratingPlaceholder(sid, requestId);
+        finalizeCollapsedReasoningPhase(sid, requestId);
+        const fromApprovalArgs = (payload.approval_args ?? {}) as { tool_calls?: ToolCallItem[] };
+        const fromNestedArgs = (payload.args ?? {}) as { tool_calls?: ToolCallItem[] };
+        const toolCalls = Array.isArray(fromApprovalArgs.tool_calls)
+          ? fromApprovalArgs.tool_calls
+          : Array.isArray(fromNestedArgs.tool_calls)
+            ? fromNestedArgs.tool_calls
+            : [];
         if (toolCalls.length === 0) {
+          wbLog("sse:approval_required:skip-empty-tool_calls", { sessionId: sid, payloadKeys: Object.keys(payload) });
           return;
         } else {
           const idRaw = typeof payload.approval_id === "string" ? payload.approval_id : "";
@@ -701,6 +718,7 @@ export function ChatWorkbench() {
           });
         }
       } else if (eventType === "usage") {
+        finalizeCollapsedReasoningPhase(sid, requestId);
         const input = Number(payload.prompt_tokens ?? 0);
         const output = Number(payload.completion_tokens ?? 0);
         const total = Number(payload.total_tokens ?? input + output);
@@ -716,6 +734,8 @@ export function ChatWorkbench() {
           },
         }));
       } else if (eventType === "error") {
+        removeGeneratingPlaceholder(sid, requestId);
+        finalizeCollapsedReasoningPhase(sid, requestId);
         streamTurnBySessionRef.current[sid] = (streamTurnBySessionRef.current[sid] ?? 0) + 1;
         const message = typeof payload.message === "string" ? payload.message : "运行异常";
         // 当前轮次已异常终止，未处理的审批已失效，避免 UI 继续显示“待审批”。
@@ -729,9 +749,11 @@ export function ChatWorkbench() {
         }));
         setSendingBySession((prev) => ({ ...prev, [sid]: false }));
       } else if (eventType === "done") {
+        removeGeneratingPlaceholder(sid, requestId);
+        finalizeCollapsedReasoningPhase(sid, requestId);
         streamTurnBySessionRef.current[sid] = (streamTurnBySessionRef.current[sid] ?? 0) + 1;
-        // 当前轮次结束后，残留审批应失效并清空，防止出现不可操作的待审批数量。
-        setApprovalsBySession((prev) => ({ ...prev, [sid]: [] }));
+        // 注意：后端在需要人工审批时会在 approval_required 之后立刻再发 done（表示本轮流式输出结束，
+        // 但仍等待 resume），此处不得清空 approvals，否则审批 UI 会被同一 tick 内的批处理冲掉。
         setRuntimeBySession((prev) => ({
           ...prev,
           [sid]: { ...(prev[sid] ?? defaultRuntimeModel), status: "done" },
@@ -739,6 +761,8 @@ export function ChatWorkbench() {
         setSendingBySession((prev) => ({ ...prev, [sid]: false }));
         setSubmittingToolCallIdsBySession((prev) => ({ ...prev, [sid]: [] }));
       } else if (eventType === "subagent_started") {
+        removeGeneratingPlaceholder(sid, requestId);
+        finalizeCollapsedReasoningPhase(sid, requestId);
         const subId = String(payload.subagent_id ?? "").trim();
         if (!subId) {
           return;
@@ -764,6 +788,7 @@ export function ChatWorkbench() {
           setActiveThreadBySession((prev) => ({ ...prev, [sid]: subId }));
         }
       } else if (eventType === "subagent_delta") {
+        finalizeCollapsedReasoningPhase(sid, requestId);
         const subId = String(payload.subagent_id ?? "").trim();
         const delta = String(payload.content ?? "");
         if (!subId || !delta) {
@@ -790,6 +815,7 @@ export function ChatWorkbench() {
           }));
         }
       } else if (eventType === "subagent_done" || eventType === "subagent_error") {
+        finalizeCollapsedReasoningPhase(sid, requestId);
         const subId = String(payload.subagent_id ?? "").trim();
         if (!subId) {
           return;
@@ -809,7 +835,9 @@ export function ChatWorkbench() {
           }));
         }
       } else if (eventType === "tool_call") {
+        finalizeCollapsedReasoningPhase(sid, requestId);
         if (content) {
+          removeGeneratingPlaceholder(sid, requestId);
           appendMessageForSession(sid, createMessage(sid, "assistant", content, requestId));
         } else {
           return;
@@ -878,11 +906,16 @@ export function ChatWorkbench() {
       "subagent_delta",
       "subagent_done",
       "subagent_error",
-    ];
+    ] as const;
+    const removeListeners: Array<() => void> = [];
     for (const type of eventTypes) {
-      es.addEventListener(type, (event) => {
+      const listener = (event: Event) => {
         const msgEvent = event as MessageEvent;
         parseAndDispatch(type, msgEvent.data);
+      };
+      es.addEventListener(type, listener);
+      removeListeners.push(() => {
+        es.removeEventListener(type, listener);
       });
     }
 
@@ -907,12 +940,11 @@ export function ChatWorkbench() {
     };
 
     return () => {
-      for (const type of eventTypes) {
-        es.removeEventListener(type, (event) => {
-          const msgEvent = event as MessageEvent;
-          parseAndDispatch(type, msgEvent.data);
-        });
+      for (const dispose of removeListeners) {
+        dispose();
       }
+      es.onopen = null;
+      es.onerror = null;
     };
   }, [clientId, defaultRuntimeModel]);
 
@@ -956,6 +988,7 @@ export function ChatWorkbench() {
       wbLog("sendMessage:skip-empty");
       return;
     } else {
+      const requestId = `${sid}:turn:${streamTurnBySessionRef.current[sid] ?? 0}`;
       setLatestErrorBySession((prev) => ({ ...prev, [sid]: undefined }));
       appendMessageForSession(sid, createMessage(sid, "user", text));
       setSendingBySession((prev) => ({ ...prev, [sid]: true }));
@@ -977,6 +1010,12 @@ export function ChatWorkbench() {
           source: "frontend",
         });
         wbLog("sendMessage:request:success");
+        if (!responseStartedByRequestRef.current.has(requestId)) {
+          appendMessageForSession(sid, {
+            ...createMessage(sid, "assistant", "", requestId),
+            generatingPending: true,
+          });
+        }
       } catch (error) {
         const message = String(error);
         wbLog("sendMessage:request:error", { error: message });
@@ -1132,6 +1171,19 @@ export function ChatWorkbench() {
             <div className="app__title">DAgents Workbench</div>
             <div className="app__subtitle">多 Agent 工作台 · MVP</div>
           </div>
+        </div>
+        <div className="app__header-actions">
+          {onOpenSettings ? (
+            <button
+              type="button"
+              className="app__icon-btn"
+              onClick={() => onOpenSettings()}
+              aria-label="打开设置"
+              title="设置"
+            >
+              <IconSettings />
+            </button>
+          ) : null}
         </div>
       </header>
 

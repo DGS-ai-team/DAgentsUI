@@ -27,6 +27,30 @@ function normalizeBubbleContent(message: ChatMessage): string {
 function MessageBubble({ message }: { message: ChatMessage }) {
   const hint = ROLE_HINT[message.role];
   const content = normalizeBubbleContent(message);
+  if (message.generatingPending) {
+    return (
+      <div className="msg msg--assistant msg--generating">
+        <div className="msg__body msg__body--hint-only">
+          <div className="msg__hint msg__hint--thinking-inline">
+            <span className="thinking-label">generating</span>
+            <ThinkingDots />
+          </div>
+        </div>
+      </div>
+    );
+  }
+  if (message.role === "reasoning" && message.reasoningCollapsed) {
+    return (
+      <div className="msg msg--reasoning msg--reasoning-collapsed">
+        <div className="msg__body msg__body--hint-only">
+          <div className="msg__hint msg__hint--thinking-inline">
+            <span className="thinking-label">thinking</span>
+            {message.reasoningPhaseActive ? <ThinkingDots /> : null}
+          </div>
+        </div>
+      </div>
+    );
+  }
   if (message.role === "tool") {
     return (
       <div className="msg msg--tool-centered">
@@ -41,10 +65,25 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   return (
     <div className={`msg msg--${message.role}`}>
       <div className="msg__body">
-        {hint ? <div className="msg__hint">{hint}</div> : null}
+        {hint ? (
+          <div className={`msg__hint${message.reasoningPhaseActive ? " msg__hint--thinking-inline" : ""}`}>
+            <span>{hint}</span>
+            {message.reasoningPhaseActive ? <ThinkingDots /> : null}
+          </div>
+        ) : null}
         <div className="msg__bubble">{content}</div>
       </div>
     </div>
+  );
+}
+
+function ThinkingDots() {
+  return (
+    <span className="thinking-dots" aria-hidden="true">
+      <span className="thinking-dot" />
+      <span className="thinking-dot" />
+      <span className="thinking-dot" />
+    </span>
   );
 }
 
@@ -65,6 +104,14 @@ function buildStream(
 ): StreamItem[] {
   const items: StreamItem[] = [];
   for (const m of messages) {
+    if (m.generatingPending) {
+      items.push({ key: `m:${m.id}`, ts: m.createdAt, kind: "message", message: m });
+      continue;
+    }
+    if (m.role === "reasoning" && m.reasoningCollapsed) {
+      items.push({ key: `m:${m.id}`, ts: m.createdAt, kind: "message", message: m });
+      continue;
+    }
     if (!String(m.content ?? "").trim()) {
       continue;
     }
