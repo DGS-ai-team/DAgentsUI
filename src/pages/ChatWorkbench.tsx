@@ -7,6 +7,7 @@ import { SubAgentThreadTabs } from "../components/SubAgentThreadTabs";
 import { SubAgentThreadView } from "../components/SubAgentThreadView";
 import { useSettings } from "../settings/SettingsContext";
 import { omitSessionKey } from "../utils/omitSessionKey";
+import { normalizeToolDisplayType } from "../utils/displayType";
 import { resolveWorkbenchApiBase } from "./chatWorkbench/resolveApiBaseUrl";
 import type {
   ApprovalTask,
@@ -14,7 +15,6 @@ import type {
   RuntimeState,
   SubAgentThread,
   ToolExecutionRecord,
-  ToolResultDisplayType,
   ToolCallDecision,
   ToolCallItem,
 } from "../ui-contracts";
@@ -88,17 +88,63 @@ function buildToolExecutionSummary(
   return `${name}：${clipped}`;
 }
 
-/**
- * 规范化后端返回的 display_type。
- * - 仅允许约定枚举值
- * - 非法值统一回退为 normal_text，避免渲染分支异常
- */
-function normalizeDisplayType(value: unknown): ToolResultDisplayType {
-  const raw = String(value ?? "").trim();
-  if (raw === "terminal" || raw === "code" || raw === "normal_text" || raw === "image") {
-    return raw;
+/** 从 tool_result 的 data 提取写入 ToolExecutionRecord.arguments 的字段（含 path 等顶层键）。 */
+function pickToolArgumentsFromToolResultPayload(p: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const nested =
+    p.arguments && typeof p.arguments === "object" && !Array.isArray(p.arguments)
+      ? (p.arguments as Record<string, unknown>)
+      : p.args && typeof p.args === "object" && !Array.isArray(p.args)
+        ? (p.args as Record<string, unknown>)
+        : null;
+  if (nested) {
+    Object.assign(out, nested);
   }
-  return "normal_text";
+  for (const key of ["path", "file_path", "target_path", "filepath", "filename", "file"]) {
+    const v = p[key];
+    if (typeof v === "string" && v.trim()) {
+      const cur = out[key];
+      if (typeof cur !== "string" || !cur.trim()) {
+        out[key] = v.trim();
+      }
+    }
+  }
+  return out;
+}
+
+/** 将 tool_call 条目里的 arguments 规范为对象（兼容后端 JSON 字符串）。 */
+function normalizeToolCallItemArguments(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // ignore invalid JSON
+    }
+  }
+  return {};
+}
+
+/** 从 SSE data 中提取 tool_calls 数组（与 approval_required 类似的嵌套结构）。 */
+function extractToolCallsFromPayload(payload: Record<string, unknown>): ToolCallItem[] {
+  const root = payload.tool_calls;
+  if (Array.isArray(root) && root.length > 0) {
+    return root as ToolCallItem[];
+  }
+  const fromApproval = (payload.approval_args ?? {}) as { tool_calls?: unknown };
+  if (Array.isArray(fromApproval.tool_calls) && fromApproval.tool_calls.length > 0) {
+    return fromApproval.tool_calls as ToolCallItem[];
+  }
+  const fromArgs = (payload.args ?? {}) as { tool_calls?: unknown };
+  if (Array.isArray(fromArgs.tool_calls) && fromArgs.tool_calls.length > 0) {
+    return fromArgs.tool_calls as ToolCallItem[];
+  }
+  return [];
 }
 
 /** 会话列表“新建”按钮图标。 */
@@ -223,6 +269,8 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
   const streamTurnBySessionRef = useRef<Record<string, number>>({});
   // 标记某个请求是否已经收到过服务端响应块，避免快速响应后补出过期 generating 占位。
   const responseStartedByRequestRef = useRef<Set<string>>(new Set());
+  /** SSE tool_call 阶段按 tool_call_id 缓存的调用参数，供 tool_result 合并展示（如 read_file 路径）。 */
+  const pendingToolCallArgsBySessionRef = useRef<Record<string, Record<string, Record<string, unknown>>>>({});
   const { settings } = useSettings();
   const showReasoningDetailRef = useRef(settings.showReasoningDetail);
   useEffect(() => {
@@ -388,6 +436,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     setSendingBySession((prev) => omitSessionKey(prev, sid));
     setRuntimeBySession((prev) => omitSessionKey(prev, sid));
     setLatestErrorBySession((prev) => omitSessionKey(prev, sid));
+    delete pendingToolCallArgsBySessionRef.current[sid];
     if (editingSessionId === sid) {
       setEditingSessionId("");
       setEditingTitleDraft("");
@@ -623,7 +672,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
         const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "tool";
         const toolCallId = typeof payload.tool_call_id === "string" ? payload.tool_call_id : "";
         const rejected = Boolean(payload.rejected);
-        const displayType = normalizeDisplayType(payload.display_type);
+        const displayType = normalizeToolDisplayType(payload.display_type);
         if (!toolCallId) {
           return;
         } else {
@@ -635,10 +684,26 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
             const current = prev[sid] ?? [];
             return { ...prev, [sid]: current.includes(toolCallId) ? current : [...current, toolCallId] };
           });
+          const pickedArgs = pickToolArgumentsFromToolResultPayload(payload as Record<string, unknown>);
+          const fromPendingSnapshot =
+            pendingToolCallArgsBySessionRef.current[sid]?.[toolCallId] ?? {};
+          {
+            const bucket = pendingToolCallArgsBySessionRef.current[sid];
+            if (bucket && toolCallId in bucket) {
+              const { [toolCallId]: _removed, ...rest } = bucket;
+              if (Object.keys(rest).length === 0) {
+                const { [sid]: _sidRemoved, ...sessions } = pendingToolCallArgsBySessionRef.current;
+                pendingToolCallArgsBySessionRef.current = sessions;
+              } else {
+                pendingToolCallArgsBySessionRef.current[sid] = rest;
+              }
+            }
+          }
           setToolExecutionsBySession((prev) => {
             const current = prev[sid] ?? [];
             const idx = current.findIndex((row) => row.toolCallId === toolCallId);
             if (idx < 0) {
+              const mergedArguments = { ...fromPendingSnapshot, ...pickedArgs };
               const created: ToolExecutionRecord = {
                 id: `${requestId}:${toolCallId}`,
                 sessionId: sid,
@@ -646,7 +711,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
                 createdAt: Date.now(),
                 toolCallId,
                 toolName,
-                arguments: {},
+                arguments: mergedArguments,
                 status: rejected ? "rejected" : "success",
                 summary: buildToolExecutionSummary(
                   toolName,
@@ -661,6 +726,11 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
               return { ...prev, [sid]: [...current, created] };
             } else {
               const next = [...current];
+              const mergedArguments = {
+                ...fromPendingSnapshot,
+                ...next[idx].arguments,
+                ...pickedArgs,
+              };
               next[idx] = {
                 ...next[idx],
                 status: rejected ? "rejected" : "success",
@@ -673,6 +743,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
                 displayType,
                 detail: JSON.stringify(payload, null, 2),
                 finishedAt: Date.now(),
+                arguments: mergedArguments,
               };
               return { ...prev, [sid]: next };
             }
@@ -836,11 +907,40 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
         }
       } else if (eventType === "tool_call") {
         finalizeCollapsedReasoningPhase(sid, requestId);
+        const toolCalls = extractToolCallsFromPayload(payload);
+        if (toolCalls.length > 0) {
+          const prevBucket = pendingToolCallArgsBySessionRef.current[sid] ?? {};
+          const bucket: Record<string, Record<string, unknown>> = { ...prevBucket };
+          for (const tc of toolCalls) {
+            const id = String(tc.id ?? "").trim();
+            if (!id) {
+              continue;
+            }
+            const args = normalizeToolCallItemArguments(tc.arguments);
+            bucket[id] = { ...(bucket[id] ?? {}), ...args };
+          }
+          pendingToolCallArgsBySessionRef.current[sid] = bucket;
+          setToolExecutionsBySession((prev) => {
+            const sessionRows = prev[sid] ?? [];
+            let changed = false;
+            const nextRows = sessionRows.map((row) => {
+              const injected = bucket[row.toolCallId];
+              if (!injected || Object.keys(injected).length === 0) {
+                return row;
+              }
+              const merged = { ...injected, ...row.arguments };
+              if (JSON.stringify(merged) === JSON.stringify(row.arguments)) {
+                return row;
+              }
+              changed = true;
+              return { ...row, arguments: merged };
+            });
+            return changed ? { ...prev, [sid]: nextRows } : prev;
+          });
+        }
         if (content) {
           removeGeneratingPlaceholder(sid, requestId);
           appendMessageForSession(sid, createMessage(sid, "assistant", content, requestId));
-        } else {
-          return;
         }
       } else {
         // ignore unsupported event types

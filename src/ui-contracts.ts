@@ -70,7 +70,7 @@ export interface ApprovalTask extends UiMeta {
 }
 
 export type ToolExecutionStatus = "running" | "success" | "rejected" | "error";
-export type ToolResultDisplayType = "terminal" | "code" | "normal_text" | "image";
+export type ToolResultDisplayType = "terminal" | "code" | "normal_text" | "image" | "markdown";
 
 export interface ToolExecutionRecord extends UiMeta {
   id: string;

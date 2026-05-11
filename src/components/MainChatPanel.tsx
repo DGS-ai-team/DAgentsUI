@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import type {
   ApprovalTask,
@@ -31,8 +33,8 @@ function MessageBubble({ message }: { message: ChatMessage }) {
     return (
       <div className="msg msg--assistant msg--generating">
         <div className="msg__body msg__body--hint-only">
-          <div className="msg__hint msg__hint--thinking-inline">
-            <span className="thinking-label">generating</span>
+          <div className="msg__hint msg__hint--stream-meta">
+            <span className="msg__meta-label">generating</span>
             <ThinkingDots />
           </div>
         </div>
@@ -43,8 +45,8 @@ function MessageBubble({ message }: { message: ChatMessage }) {
     return (
       <div className="msg msg--reasoning msg--reasoning-collapsed">
         <div className="msg__body msg__body--hint-only">
-          <div className="msg__hint msg__hint--thinking-inline">
-            <span className="thinking-label">thinking</span>
+          <div className="msg__hint msg__hint--stream-meta">
+            <span className="msg__meta-label">thinking</span>
             {message.reasoningPhaseActive ? <ThinkingDots /> : null}
           </div>
         </div>
@@ -55,7 +57,11 @@ function MessageBubble({ message }: { message: ChatMessage }) {
     return (
       <div className="msg msg--tool-centered">
         <div className="msg__body msg__body--wide">
-          {hint ? <div className="msg__hint">{hint}</div> : null}
+          {hint ? (
+            <div className="msg__hint msg__hint--stream-meta">
+              <span className="msg__meta-label">{hint}</span>
+            </div>
+          ) : null}
           <div className="msg__bubble msg__bubble--tool-centered">{content}</div>
         </div>
       </div>
@@ -66,12 +72,38 @@ function MessageBubble({ message }: { message: ChatMessage }) {
     <div className={`msg msg--${message.role}`}>
       <div className="msg__body">
         {hint ? (
-          <div className={`msg__hint${message.reasoningPhaseActive ? " msg__hint--thinking-inline" : ""}`}>
-            <span>{hint}</span>
+          <div
+            className={`msg__hint${message.role === "reasoning" || message.role === "system" ? " msg__hint--stream-meta" : ""}`}
+          >
+            <span className={message.role === "reasoning" || message.role === "system" ? "msg__meta-label" : undefined}>
+              {hint}
+            </span>
             {message.reasoningPhaseActive ? <ThinkingDots /> : null}
           </div>
         ) : null}
-        <div className="msg__bubble">{content}</div>
+        {message.role === "assistant" ? (
+          <div className="msg__bubble msg__bubble--assistant-md">
+            <div className="tool-exec-bubble__markdown assistant-msg__md">
+              <Markdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  a: ({ href, children, ...rest }) => (
+                    <a href={href} target="_blank" rel="noopener noreferrer" {...rest}>
+                      {children}
+                    </a>
+                  ),
+                  img: ({ src, alt, ...rest }) => (
+                    <img src={src} alt={alt ?? ""} className="tool-exec-bubble__md-img" {...rest} />
+                  ),
+                }}
+              >
+                {content}
+              </Markdown>
+            </div>
+          </div>
+        ) : (
+          <div className="msg__bubble">{content}</div>
+        )}
       </div>
     </div>
   );
@@ -79,10 +111,10 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 
 function ThinkingDots() {
   return (
-    <span className="thinking-dots" aria-hidden="true">
-      <span className="thinking-dot" />
-      <span className="thinking-dot" />
-      <span className="thinking-dot" />
+    <span className="msg__meta-dots" aria-hidden="true">
+      <span className="msg__meta-dot" />
+      <span className="msg__meta-dot" />
+      <span className="msg__meta-dot" />
     </span>
   );
 }
