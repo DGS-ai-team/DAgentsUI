@@ -50,7 +50,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ARTIFACT_NAME="DAgents-${{ matrix.platform.name }}-${{ github.sha }}"
+          ARTIFACT_NAME="DAgents-${{ matrix.platform.name }}"
           STAGE_DIR="release-stage/${ARTIFACT_NAME}"
           mkdir -p "${STAGE_DIR}"
           cp -r dist "${STAGE_DIR}/dist"
@@ -69,7 +69,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $artifactName = "DAgents-${{ matrix.platform.name }}-${{ github.sha }}"
+          $artifactName = "DAgents-${{ matrix.platform.name }}"
           $stageRoot = "release-stage"
           $stageDir = Join-Path $stageRoot $artifactName
           New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
