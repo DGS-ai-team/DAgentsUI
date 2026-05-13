@@ -25,7 +25,6 @@ win:
   icon: public/favicon.ico
   # 签名：CI 中设置 CSC_LINK（.pfx 路径）与 CSC_KEY_PASSWORD；本地可设环境变量或导入证书到存储区
   verifyUpdateCodeSignature: false
-  signDlls: true
 
 mac:
   target:
