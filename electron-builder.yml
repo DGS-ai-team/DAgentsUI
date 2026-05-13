@@ -22,7 +22,7 @@ win:
   target:
     - target: portable
       arch: [x64]
-  icon: public/favicon.ico
+  icon: build/icon.png
   # 签名：CI 中设置 CSC_LINK（.pfx 路径）与 CSC_KEY_PASSWORD；本地可设环境变量或导入证书到存储区
   verifyUpdateCodeSignature: false
 
@@ -30,7 +30,7 @@ mac:
   target:
     - target: zip
       arch: [arm64]
-  icon: public/favicon.ico
+  icon: build/icon.png
   category: public.app-category.developer-tools
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
