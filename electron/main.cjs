@@ -11,6 +11,7 @@ const appVersion = (() => {
 })();
 
 const { createApiProxy, DEFAULT_PORT, stripTrailingSlash } = require("./api-proxy.cjs");
+const logger = require("./logger.cjs");
 
 const DEFAULT_USER_SETTINGS = Object.freeze({
   showReasoningDetail: true,
@@ -19,35 +20,53 @@ const DEFAULT_USER_SETTINGS = Object.freeze({
 /** 项目根目录 `.env` 解析结果缓存（仅主进程启动时读一次，用于 API_PROXY_PORT 等）。 */
 let rootDotEnvCache = null;
 
+function rootDotEnvCandidatePaths() {
+  const list = [];
+  if (app.isPackaged) {
+    // 与便携 exe / .app 内可执行文件同目录（用户最常把 .env 放在这里）
+    list.push(path.join(path.dirname(app.getPath("exe")), ".env"));
+    // electron-builder extraFiles 等多在 resources（Windows: app/resources；mac: Contents/Resources）
+    list.push(path.join(process.resourcesPath, ".env"));
+  }
+  list.push(path.join(__dirname, "..", ".env"));
+  return list;
+}
+
 function readRootDotEnv() {
   if (rootDotEnvCache) {
     return rootDotEnvCache;
   }
   const out = {};
-  const envPath = path.join(__dirname, "..", ".env");
-  if (!fs.existsSync(envPath)) {
-    rootDotEnvCache = out;
-    return out;
-  }
-  try {
-    const content = fs.readFileSync(envPath, "utf8");
-    for (const line of content.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) {
-        continue;
-      }
-      const idx = trimmed.indexOf("=");
-      if (idx < 0) {
-        continue;
-      }
-      const key = trimmed.slice(0, idx).trim();
-      const value = trimmed.slice(idx + 1).trim();
-      if (key) {
-        out[key] = value;
-      }
+  let loadedPath = null;
+  for (const envPath of rootDotEnvCandidatePaths()) {
+    if (!fs.existsSync(envPath)) {
+      continue;
     }
-  } catch {
-    // ignore unreadable .env
+    try {
+      const content = fs.readFileSync(envPath, "utf8");
+      for (const line of content.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) {
+          continue;
+        }
+        const idx = trimmed.indexOf("=");
+        if (idx < 0) {
+          continue;
+        }
+        const key = trimmed.slice(0, idx).trim();
+        const value = trimmed.slice(idx + 1).trim();
+        if (key) {
+          out[key] = value;
+        }
+      }
+      loadedPath = envPath;
+      break;
+    } catch {
+      // try next candidate
+    }
+  }
+  if (loadedPath) {
+    logger.log("[DAgentsUI] Loaded .env from", loadedPath);
   }
   rootDotEnvCache = out;
   return out;
@@ -69,7 +88,7 @@ function resolveApiProxyListenPort() {
   }
   const n = Number(s);
   if (!Number.isInteger(n) || n < 1 || n > 65535) {
-    console.warn(`[DAgentsUI] Invalid API_PROXY_PORT "${s}", falling back to default ${DEFAULT_PORT}`);
+    logger.warn(`[DAgentsUI] Invalid API_PROXY_PORT "${s}", falling back to default ${DEFAULT_PORT}`);
     return undefined;
   }
   return n;
@@ -131,6 +150,13 @@ function registerSettingsIpc() {
   ipcMain.handle("settings:path", () => userSettingsPath());
 }
 
+function registerLogIpc() {
+  ipcMain.handle("log:getPaths", () => ({
+    dir: logger.getLogDir(),
+    file: logger.getLogFilePath(),
+  }));
+}
+
 function registerProxyIpc() {
   ipcMain.handle("proxy:setTarget", (_event, url) => {
     const next = stripTrailingSlash(typeof url === "string" ? url : "");
@@ -164,9 +190,9 @@ async function startEmbeddedApiProxy() {
     const { server, port } = await createApiProxy(proxyOpts);
     apiProxyServer = server;
     apiProxyPort = port;
-    console.log(`[DAgentsUI] API reverse proxy listening on http://127.0.0.1:${port} -> ${proxyUpstreamUrl}`);
+    logger.log(`[DAgentsUI] API reverse proxy listening on http://127.0.0.1:${port} -> ${proxyUpstreamUrl}`);
   } catch (err) {
-    console.error("[DAgentsUI] API reverse proxy failed to start:", err);
+    logger.error("[DAgentsUI] API reverse proxy failed to start:", err);
   }
 }
 
@@ -194,7 +220,10 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  logger.initLogger();
+  logger.log("[DAgentsUI] App starting", { version: appVersion, packaged: app.isPackaged });
   registerSettingsIpc();
+  registerLogIpc();
   registerProxyIpc();
   await startEmbeddedApiProxy();
   createWindow();

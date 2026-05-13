@@ -30,6 +30,11 @@ function createApiProxy(opts) {
   });
 
   proxy.on("error", (err, req, res) => {
+    try {
+      require("./logger.cjs").error("proxy error", err?.message ?? err);
+    } catch {
+      console.error("[api-proxy]", err);
+    }
     if (res && typeof res.writeHead === "function" && !res.headersSent) {
       res.writeHead(502, { "Content-Type": "text/plain; charset=utf-8" });
     }

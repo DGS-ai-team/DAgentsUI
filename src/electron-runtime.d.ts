@@ -12,6 +12,8 @@ declare global {
       getLocalApiProxyBaseUrl: () => Promise<string>;
       /** 当前内置反向代理实际监听端口（与 .env / 环境变量 API_PROXY_PORT 一致，缺省为 37421）。 */
       getApiProxyListenPort: () => Promise<number>;
+      /** 主进程日志目录与当前日志文件路径（Electron）。 */
+      getLogPaths: () => Promise<{ dir: string; file: string }>;
     };
   }
 }
