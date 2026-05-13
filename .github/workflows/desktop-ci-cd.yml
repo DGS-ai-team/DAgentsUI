@@ -59,8 +59,22 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "CSC_LINK=$path"
 
       # macOS：Developer ID Application 等 .p12 的 Base64 + 密码；未配置时 zip 内为 ad-hoc 签名。公证需在 electron-builder.yml 将 mac.notarize 设为 true 并配置 APPLE_* 环境变量。
+      # 不在 if 中直接使用 secrets（部分校验器/环境会报错）；改为先写入 step output 再判断。
+      - name: Detect macOS signing credentials
+        id: mac_signing
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          P12_B64: ${{ secrets.MACOS_CODESIGN_P12_BASE64 }}
+        run: |
+          if [ -n "${P12_B64}" ]; then
+            echo "has_p12=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_p12=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Import macOS code signing certificate
-        if: runner.os == 'macOS' && secrets.MACOS_CODESIGN_P12_BASE64 != ''
+        if: runner.os == 'macOS' && steps.mac_signing.outputs.has_p12 == 'true'
         uses: apple-actions/import-codesign-certs@v3
         with:
           p12-file-base64: ${{ secrets.MACOS_CODESIGN_P12_BASE64 }}
