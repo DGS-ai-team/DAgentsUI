@@ -1,0 +1,40 @@
+# 输出目录必须与 Vite 的 dist/ 分离，否则打包会覆盖前端产物。
+appId: com.dagents.ui
+productName: DAgentsUI
+copyright: Copyright © DAgentsUI
+
+directories:
+  output: electron-release
+  buildResources: build
+
+files:
+  - package.json
+  - dist/**/*
+  - electron/**/*
+  - node_modules/**/*
+
+asar: true
+
+# 产物命名：Windows 便携 exe、macOS 为 zip 包（内含 .app，免安装解压即用）
+artifactName: DAgents-${os}-${arch}.${ext}
+
+win:
+  target:
+    - target: portable
+      arch: [x64]
+  icon: public/favicon.ico
+  # 签名：CI 中设置 CSC_LINK（.pfx 路径）与 CSC_KEY_PASSWORD；本地可设环境变量或导入证书到存储区
+  verifyUpdateCodeSignature: false
+  signDlls: true
+
+mac:
+  target:
+    - target: zip
+      arch: [arm64]
+  icon: public/favicon.ico
+  category: public.app-category.developer-tools
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # 公证：在仓库中配置 APPLE_ID、APPLE_APP_SPECIFIC_PASSWORD、APPLE_TEAM_ID 后改为 true
+  notarize: false

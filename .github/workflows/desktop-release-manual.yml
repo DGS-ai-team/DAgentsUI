@@ -40,52 +40,47 @@ jobs:
       - name: Build frontend assets
         run: pnpm build
 
-      - name: Verify Electron runtime
-        run: pnpm exec electron --version
-
-      - name: Prepare packaged artifact (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          ARTIFACT_NAME="DAgents-${{ matrix.platform.name }}"
-          STAGE_DIR="release-stage/${ARTIFACT_NAME}"
-          mkdir -p "${STAGE_DIR}"
-          cp -r dist "${STAGE_DIR}/dist"
-          cp -r electron "${STAGE_DIR}/electron"
-          cp package.json "${STAGE_DIR}/package.json"
-          cp pnpm-lock.yaml "${STAGE_DIR}/pnpm-lock.yaml"
-          if [ -f "README.md" ]; then
-            cp "README.md" "${STAGE_DIR}/README.md"
-          fi
-          if [ -f ".env.example" ]; then
-            cp ".env.example" "${STAGE_DIR}/.env.example"
-          fi
-          (cd "${STAGE_DIR}" && zip -r "../${ARTIFACT_NAME}.zip" .)
-
-      - name: Prepare packaged artifact (Windows)
+      # Windows Authenticode：仓库 Secrets 中存放 Base64 编码的 .pfx（WINDOWS_CODESIGN_PFX_BASE64）及密码（WINDOWS_CODESIGN_PFX_PASSWORD）。未配置时产出未签名 exe。
+      - name: Configure Windows code signing
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
         run: |
-          $artifactName = "DAgents-${{ matrix.platform.name }}"
-          $stageRoot = "release-stage"
-          $stageDir = Join-Path $stageRoot $artifactName
-          New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
-          Copy-Item "dist" -Destination (Join-Path $stageDir "dist") -Recurse -Force
-          Copy-Item "electron" -Destination (Join-Path $stageDir "electron") -Recurse -Force
-          Copy-Item "package.json" -Destination (Join-Path $stageDir "package.json") -Force
-          Copy-Item "pnpm-lock.yaml" -Destination (Join-Path $stageDir "pnpm-lock.yaml") -Force
-          if (Test-Path "README.md") {
-            Copy-Item "README.md" -Destination (Join-Path $stageDir "README.md") -Force
+          if ([string]::IsNullOrWhiteSpace($env:PFX_B64)) {
+            Write-Host "::notice::Building unsigned Windows portable. Set WINDOWS_CODESIGN_PFX_BASE64 + WINDOWS_CODESIGN_PFX_PASSWORD for Authenticode."
+            Add-Content -Path $env:GITHUB_ENV -Value "CSC_IDENTITY_AUTO_DISCOVERY=false"
+            exit 0
           }
-          if (Test-Path ".env.example") {
-            Copy-Item ".env.example" -Destination (Join-Path $stageDir ".env.example") -Force
-          }
-          Compress-Archive -Path (Join-Path $stageDir "*") -DestinationPath (Join-Path $stageRoot "$artifactName.zip") -Force
+          $path = Join-Path $env:GITHUB_WORKSPACE "codesign-windows.pfx"
+          [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:PFX_B64))
+          Add-Content -Path $env:GITHUB_ENV -Value "CSC_LINK=$path"
 
-      - name: Upload build artifact
+      # macOS：Developer ID Application 等 .p12 的 Base64 + 密码；未配置时 zip 内为 ad-hoc 签名。
+      - name: Import macOS code signing certificate
+        if: runner.os == 'macOS' && secrets.MACOS_CODESIGN_P12_BASE64 != ''
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.MACOS_CODESIGN_P12_BASE64 }}
+          p12-password: ${{ secrets.MACOS_CODESIGN_P12_PASSWORD }}
+
+      - name: Build Electron portable (Windows)
+        if: runner.os == 'Windows'
+        env:
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+        run: pnpm exec electron-builder --win portable --publish never
+
+      - name: Build Electron portable (macOS)
+        if: runner.os == 'macOS'
+        env:
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CODESIGN_P12_PASSWORD }}
+        run: pnpm exec electron-builder --mac zip --publish never
+
+      - name: Upload desktop portable
         uses: actions/upload-artifact@v4
         with:
           name: DAgents-${{ matrix.platform.name }}
-          path: release-stage/*.zip
+          path: |
+            electron-release/*.exe
+            electron-release/*.zip
 
