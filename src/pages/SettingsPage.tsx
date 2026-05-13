@@ -12,6 +12,7 @@ export function SettingsPage({ onBack }: Props) {
   const [backendDraft, setBackendDraft] = useState(settings.backendBaseUrl ?? "");
   const [settingsPath, setSettingsPath] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [proxyListenPort, setProxyListenPort] = useState<number | null>(null);
 
   const isElectron = Boolean(
     typeof window !== "undefined" && window.electronRuntime?.getLocalApiProxyBaseUrl,
@@ -35,6 +36,28 @@ export function SettingsPage({ onBack }: Props) {
           if (!cancelled) {
             setSettingsPath(null);
           }
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      if (!window.electronRuntime?.getApiProxyListenPort) {
+        return;
+      }
+      try {
+        const port = await window.electronRuntime.getApiProxyListenPort();
+        if (!cancelled && typeof port === "number") {
+          setProxyListenPort(port);
+        }
+      } catch {
+        if (!cancelled) {
+          setProxyListenPort(null);
         }
       }
     })();
@@ -99,9 +122,15 @@ export function SettingsPage({ onBack }: Props) {
               <section className="settings-section">
                 <h2 className="settings-section__title">API 与反向代理</h2>
                 <p className="settings-section__desc">
-                  桌面版在 <code>127.0.0.1:37421</code> 启动内置反向代理，页面只访问该地址，由主进程转发到下方「真实后端」。
-                  留空则使用默认 <code>http://127.0.0.1:8000</code>。项目根目录 <code>.env</code> 中的{" "}
-                  <code>API_BASE_URL</code> 若存在，会在启动时覆盖此处（便于开发）。
+                  桌面版在{" "}
+                  <code>
+                    127.0.0.1:{proxyListenPort ?? "…"}
+                  </code>{" "}
+                  启动内置反向代理（端口可通过环境变量{" "}
+                  <code>API_PROXY_PORT</code> 或项目根 <code>.env</code> 中同名项配置，缺省为 37421；修改后需重启应用）。
+                  页面只访问该地址，由主进程转发到下方「真实后端」。留空则使用默认{" "}
+                  <code>http://127.0.0.1:8000</code>。项目根目录 <code>.env</code> 中的 <code>API_BASE_URL</code>{" "}
+                  若存在，会在启动时覆盖此处（便于开发）。
                 </p>
                 <label className="settings-field">
                   <span className="settings-field__label">真实 DAgents API 根地址</span>

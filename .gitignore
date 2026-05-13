@@ -25,6 +25,5 @@ pnpm-debug.log*
 Thumbs.db
 .idea/
 .vscode/
-
 # electron runtime cache
 .electron-client-id

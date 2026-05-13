@@ -5,7 +5,7 @@
 ## 当前结构
 
 - `main.tsx`：React 挂载入口。
-- `App.tsx`：应用根组件（当前渲染 `ChatWorkbench`）。
+- `App.tsx`：应用根组件（工作台与设置视图切换；`ChatWorkbench` 保持挂载，设置页叠放显示）。
 - `styles.css`：全局设计令牌与样式系统。
 - `pages/ChatWorkbench.tsx`：工作台页面（主对话 + 运行状态 + 子线程）。
 - `pages/chatWorkbench/resolveApiBaseUrl.ts`：启动期解析 API 基址、clientId 与 Electron 内嵌代理。

@@ -1,5 +1,7 @@
 # DAgentsUI
 
+**当前发布版本**：`v0.1.0`（`package.json` 字段为 `0.1.0`）。打 Git 标签请使用 `v0.1.0`，与 CI 中 `push: tags: v*` 规则一致。
+
 **本仓库为 DAgents Web 前端**：基于 React + TypeScript + Vite 的对话工作台，通过 HTTP / SSE 与 [DAgents](https://github.com/DGS-ai-team/DAgents) 后端联调；可选 Electron 桌面壳与发布流水线。  
 **协议**：[MIT License](LICENSE)。**后端运行时**见 [DAgents](https://github.com/DGS-ai-team/DAgents)。
 
@@ -21,6 +23,7 @@
 
 ```text
 DAgentsUI/
+├── CHANGELOG.md               # 版本变更记录（与 Git 标签 v* 对应）
 ├── LICENSE
 ├── package.json
 ├── pnpm-lock.yaml
@@ -31,6 +34,7 @@ DAgentsUI/
 ├── .env.example                 # 环境变量模板（复制为 .env / .env.local）
 ├── openapi.json                 # API 契约快照（与后端导出对齐后执行 gen:types）
 ├── public/                      # 静态资源（favicon 等，不经打包直接拷贝到 dist）
+├── doc/                         # 长文档：架构、UI 行为、跨域方案等（见 doc/README.md）
 ├── scripts/                     # 类型生成、Electron 开发脚本等（见 scripts/README.md）
 ├── electron/                    # Electron 主进程与 preload
 ├── src/                         # 前端源码（见 src/README.md）
@@ -53,7 +57,7 @@ DAgentsUI/
 ```bash
 pnpm install
 cp .env.example .env
-# 按需编辑 VITE_API_BASE_URL，例如 http://127.0.0.1:8000
+# 按需编辑：Web 用 VITE_API_BASE_URL；Electron 还可设 API_BASE_URL、API_PROXY_PORT（见 .env.example 内注释）
 ```
 
 ### B）开发服务器（Web）
@@ -71,6 +75,8 @@ pnpm dev:web
 ```bash
 pnpm dev:electron
 ```
+
+首次安装若 Electron 脚本被 pnpm 拦截，需执行：`pnpm approve-builds --all`（见 `pnpm-workspace.yaml` 中 `allowBuilds`）。
 
 ### D）构建与预览
 
@@ -99,7 +105,7 @@ pnpm preview
 1. 在后端仓库根目录导出 OpenAPI，覆盖或同步到本仓库根目录 **`openapi.json`**：  
    `python export_openapi_schema.py --output /path/to/DAgentsUI/openapi.json`
 2. 在本仓库执行：`pnpm gen:types`
-3. 通过 **`VITE_API_BASE_URL`** 指向正在运行的 Agent API（默认常见为 **`http://127.0.0.1:8000`**，以后端实际监听为准）
+3. 配置 API 根地址：**Web** 用 **`VITE_API_BASE_URL`**；**Electron** 可用项目根 **`.env`** 的 **`API_BASE_URL`**、**`API_PROXY_PORT`** 及设置页「真实 DAgents API」，优先级见 `src/pages/chatWorkbench/resolveApiBaseUrl.ts`（默认常见 **`http://127.0.0.1:8000`**，以后端实际监听为准）。
 
 更细的契约维护说明见下文 **「API 说明」** 与 **`src/api/README.md`**。
 
@@ -111,10 +117,11 @@ pnpm preview
 |------|----------------|
 | 创建会话 | `POST /v1/sessions` |
 | 提交消息 | `POST /v1/messages` |
-| 按请求 SSE | `GET /v1/streams/{request_id}` |
+| 全局 SSE（工作台当前使用） | `GET /v1/streams?client_id=...`（见 `src/api/client.ts` 的 `streamAllUrl`） |
+| 按请求 SSE（若 openapi 中存在） | `GET /v1/streams/{request_id}` |
 | 取消当前 turn | `POST /v1/sessions/{session_id}/cancel` |
 
-后端若另提供 **按 `client_id` 的全局 SSE**（例如 `GET /v1/streams?client_id=...`），以前端同步后的 **`openapi.json`** 与 **`src/api/client.ts`** 为准；`client.ts` 中可能包含与聚合流相关的 URL 组装辅助方法。
+主界面实时流以前端实际调用为准：**全局**订阅为 `GET /v1/streams?client_id=...`；`openapi.json` 中若另有 **按 request_id** 的路径，以导出文件与 `pnpm gen:types` 结果为准。
 
 ## 开发说明
 
@@ -126,9 +133,15 @@ pnpm preview
 
 - 勿将 **`.env`**、密钥、令牌提交到版本库。
 - 开发环境建议使用独立凭据与隔离的后端 / API Key。
+- 纯 Web 联调若遇跨域，见 [doc/cross-origin-solutions.md](doc/cross-origin-solutions.md)（后端 CORS 或开发代理；Electron 见内嵌代理方案）。
 
 ## 文档入口
 
+- [doc/README.md](doc/README.md)（`doc/` 下各文档的作用说明）
+- [doc/architecture-and-business-flows.md](doc/architecture-and-business-flows.md)（技术架构与业务流程）
+- [doc/ui-behaviors.md](doc/ui-behaviors.md)（各 UI 区域与交互行为）
+- [doc/cross-origin-solutions.md](doc/cross-origin-solutions.md)（跨域与 CORS 技术方案）
+- [CHANGELOG.md](CHANGELOG.md)
 - [src/README.md](src/README.md)
 - [src/api/README.md](src/api/README.md)
 - [scripts/README.md](scripts/README.md)

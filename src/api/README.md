@@ -5,7 +5,7 @@
 ## 当前文件
 
 - `types.ts`：由 OpenAPI 自动生成的 TypeScript 类型定义（请勿手改）。
-- `client.ts`：基于生成类型的前端 API 调用封装（`createSession` / `submitMessage` / `cancelCurrentTurn` / `streamUrl`）。
+- `client.ts`：基于生成类型的前端 API 调用封装（`createSession` / `submitMessage` / `cancelCurrentTurn` / `streamAllUrl` 等）。
 
 ## 更新流程
 

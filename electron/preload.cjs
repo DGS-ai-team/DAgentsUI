@@ -52,4 +52,5 @@ contextBridge.exposeInMainWorld("electronRuntime", {
   getUserSettingsFilePath: () => ipcRenderer.invoke("settings:path"),
   setProxyTarget: (url) => ipcRenderer.invoke("proxy:setTarget", url),
   getLocalApiProxyBaseUrl: () => ipcRenderer.invoke("proxy:getBaseUrl"),
+  getApiProxyListenPort: () => ipcRenderer.invoke("proxy:getListenPort"),
 });

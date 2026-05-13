@@ -2,11 +2,78 @@ const { app, BrowserWindow, ipcMain } = require("electron");
 const fs = require("fs");
 const path = require("path");
 
+const appVersion = (() => {
+  try {
+    return require(path.join(__dirname, "../package.json")).version ?? "0.1.0";
+  } catch {
+    return "0.1.0";
+  }
+})();
+
 const { createApiProxy, DEFAULT_PORT, stripTrailingSlash } = require("./api-proxy.cjs");
 
 const DEFAULT_USER_SETTINGS = Object.freeze({
   showReasoningDetail: true,
 });
+
+/** 项目根目录 `.env` 解析结果缓存（仅主进程启动时读一次，用于 API_PROXY_PORT 等）。 */
+let rootDotEnvCache = null;
+
+function readRootDotEnv() {
+  if (rootDotEnvCache) {
+    return rootDotEnvCache;
+  }
+  const out = {};
+  const envPath = path.join(__dirname, "..", ".env");
+  if (!fs.existsSync(envPath)) {
+    rootDotEnvCache = out;
+    return out;
+  }
+  try {
+    const content = fs.readFileSync(envPath, "utf8");
+    for (const line of content.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) {
+        continue;
+      }
+      const idx = trimmed.indexOf("=");
+      if (idx < 0) {
+        continue;
+      }
+      const key = trimmed.slice(0, idx).trim();
+      const value = trimmed.slice(idx + 1).trim();
+      if (key) {
+        out[key] = value;
+      }
+    }
+  } catch {
+    // ignore unreadable .env
+  }
+  rootDotEnvCache = out;
+  return out;
+}
+
+/**
+ * 内置反向代理监听端口。
+ * 优先级：process.env.API_PROXY_PORT（或 ELECTRON_API_PROXY_PORT）→ 项目根 .env 中 API_PROXY_PORT → 缺省使用 api-proxy 模块内 DEFAULT_PORT。
+ */
+function resolveApiProxyListenPort() {
+  const raw =
+    process.env.API_PROXY_PORT ??
+    process.env.ELECTRON_API_PROXY_PORT ??
+    readRootDotEnv().API_PROXY_PORT ??
+    "";
+  const s = String(raw).trim();
+  if (!s) {
+    return undefined;
+  }
+  const n = Number(s);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    console.warn(`[DAgentsUI] Invalid API_PROXY_PORT "${s}", falling back to default ${DEFAULT_PORT}`);
+    return undefined;
+  }
+  return n;
+}
 
 /** 当前代理转发的真实 API 根地址（由渲染进程 bootstrap 时同步）。 */
 let proxyUpstreamUrl = "http://127.0.0.1:8000";
@@ -76,6 +143,8 @@ function registerProxyIpc() {
   });
 
   ipcMain.handle("proxy:getBaseUrl", () => `http://127.0.0.1:${apiProxyPort}`);
+
+  ipcMain.handle("proxy:getListenPort", () => apiProxyPort);
 }
 
 async function startEmbeddedApiProxy() {
@@ -87,10 +156,12 @@ async function startEmbeddedApiProxy() {
     if (fromSettings) {
       proxyUpstreamUrl = fromSettings;
     }
-    const { server, port } = await createApiProxy({
-      getTargetUrl: () => proxyUpstreamUrl,
-      port: DEFAULT_PORT,
-    });
+    const proxyOpts = { getTargetUrl: () => proxyUpstreamUrl };
+    const listenPort = resolveApiProxyListenPort();
+    if (listenPort !== undefined) {
+      proxyOpts.port = listenPort;
+    }
+    const { server, port } = await createApiProxy(proxyOpts);
     apiProxyServer = server;
     apiProxyPort = port;
     console.log(`[DAgentsUI] API reverse proxy listening on http://127.0.0.1:${port} -> ${proxyUpstreamUrl}`);
@@ -101,6 +172,7 @@ async function startEmbeddedApiProxy() {
 
 function createWindow() {
   const win = new BrowserWindow({
+    title: `DAgentsUI v${appVersion}`,
     width: 1400,
     height: 900,
     minWidth: 1024,

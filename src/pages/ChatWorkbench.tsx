@@ -216,6 +216,9 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
   const [sessionIds, setSessionIds] = useState<string[]>([]);
   // 当前激活（右侧主面板展示）的会话 ID。
   const [activeSessionId, setActiveSessionId] = useState<string>("");
+  /** 与 activeSessionId 同步，供 SSE 等长生命周期回调读取，避免闭包过期导致误切换当前会话。 */
+  const activeSessionIdRef = useRef(activeSessionId);
+  activeSessionIdRef.current = activeSessionId;
   // 按会话维度存储消息列表。
   const [messagesBySession, setMessagesBySession] = useState<Record<string, ChatMessage[]>>({});
   // 按会话维度存储待审批工具任务。
@@ -350,7 +353,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
         },
       };
     });
-    if (!activeSessionId) {
+    if (!activeSessionIdRef.current) {
       setActiveSessionId(sid);
     }
   };
@@ -856,7 +859,9 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
               [sid]: current.some((item) => item.id === thread.id) ? current : [...current, thread],
             };
           });
-          setActiveThreadBySession((prev) => ({ ...prev, [sid]: subId }));
+          if (sid === activeSessionIdRef.current) {
+            setActiveThreadBySession((prev) => ({ ...prev, [sid]: subId }));
+          }
         }
       } else if (eventType === "subagent_delta") {
         finalizeCollapsedReasoningPhase(sid, requestId);

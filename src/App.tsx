@@ -9,11 +9,16 @@ export function App() {
 
   return (
     <SettingsProvider>
-      {view === "chat" ? (
-        <ChatWorkbench onOpenSettings={() => setView("settings")} />
-      ) : (
-        <SettingsPage onBack={() => setView("chat")} />
-      )}
+      <div className="app-shell">
+        <div className={view === "settings" ? "app-shell__chat app-shell__chat--hidden" : "app-shell__chat"}>
+          <ChatWorkbench onOpenSettings={() => setView("settings")} />
+        </div>
+        {view === "settings" ? (
+          <div className="app-shell__settings">
+            <SettingsPage onBack={() => setView("chat")} />
+          </div>
+        ) : null}
+      </div>
     </SettingsProvider>
   );
 }
