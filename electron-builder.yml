@@ -15,8 +15,8 @@ files:
 
 asar: true
 
-# 与 exe / .app 同级的配置模板（用户复制为 .env 后编辑）
-extraFiles:
+# 配置模板：放入 resources（mac 为 .app/Contents/Resources），避免在 Contents 根目录触发 codesign runtime 失败。
+extraResources:
   - .env.example
 
 # 产物命名：Windows 便携 exe、macOS 为 zip 包（内含 .app，免安装解压即用）
