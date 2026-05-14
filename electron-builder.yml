@@ -15,9 +15,11 @@ files:
 
 asar: true
 
-# 配置模板：放入 resources（mac 为 .app/Contents/Resources），避免在 Contents 根目录触发 codesign runtime 失败。
+# 环境变量模板：构建后生成 dist/env.example（与根 .env.example 同内容），再从该路径 extraResources，
+# 避免「源路径以 . 开头」在部分 electron-builder / portable 组合下未被拷贝；产物位于 resources/.env.example。
 extraResources:
-  - .env.example
+  - from: dist/env.example
+    to: .env.example
 
 # 产物命名：Windows 便携 exe、macOS 为 zip 包（内含 .app，免安装解压即用）
 artifactName: DAgents-${os}-${arch}.${ext}
