@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { DAgentsApiClient } from "../api/client";
 import { MainChatPanel } from "../components/MainChatPanel";
@@ -271,8 +271,12 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
   const [editingTitleDraft, setEditingTitleDraft] = useState<string>("");
   // 全局 SSE 连接状态（用于状态面板显示）。
   const [sseConnected, setSseConnected] = useState(false);
+  /** 每次重建 EventSource 时递增，驱动事件监听 effect 重新绑定。 */
+  const [sseGeneration, setSseGeneration] = useState(0);
   // 全局 EventSource 实例引用（避免重复创建）。
   const globalStreamRef = useRef<EventSource | null>(null);
+  /** 已记录的后端地址（用于检测设置页保存后是否需要重连 SSE）。 */
+  const trackedBackendBaseUrlRef = useRef<string | undefined>(undefined);
   // 已处理事件序号集合（用于 SSE 去重）。
   const seenEventSeqRef = useRef<Set<string>>(new Set());
   // 每个会话当前流式轮次计数（用于拼接增量内容时区分轮次）。
@@ -281,7 +285,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
   const responseStartedByRequestRef = useRef<Set<string>>(new Set());
   /** SSE tool_call 阶段按 tool_call_id 缓存的调用参数，供 tool_result 合并展示（如 read_file 路径）。 */
   const pendingToolCallArgsBySessionRef = useRef<Record<string, Record<string, Record<string, unknown>>>>({});
-  const { settings } = useSettings();
+  const { settings, loaded: settingsLoaded } = useSettings();
   const showReasoningDetailRef = useRef(settings.showReasoningDetail);
   useEffect(() => {
     showReasoningDetailRef.current = settings.showReasoningDetail;
@@ -476,7 +480,108 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     setEditingTitleDraft("");
   };
 
-  // ----- 启动：默认会话 + 全局 SSE（单例 EventSource）-----
+  const closeGlobalSse = useCallback(() => {
+    const es = globalStreamRef.current;
+    if (!es) {
+      return;
+    }
+    wbLog("sse:global:close");
+    es.close();
+    globalStreamRef.current = null;
+    setSseConnected(false);
+  }, []);
+
+  const resetWorkbenchSessionState = useCallback(() => {
+    wbLog("workbench:reset-for-backend-switch");
+    setSessionIds([]);
+    setActiveSessionId(DEFAULT_SESSION_ID);
+    setMessagesBySession({});
+    setApprovalsBySession({});
+    setToolExecutionsBySession({});
+    setThreadsBySession({});
+    setActiveThreadBySession({});
+    setSubmittingToolCallIdsBySession({});
+    setRunningToolCallIdsBySession({});
+    setCompletedToolCallIdsBySession({});
+    setSendingBySession({});
+    setRuntimeBySession({});
+    setLatestErrorBySession({});
+    setSessionTitleById({});
+    setEditingSessionId("");
+    setEditingTitleDraft("");
+    seenEventSeqRef.current.clear();
+    streamTurnBySessionRef.current = {};
+    responseStartedByRequestRef.current.clear();
+    pendingToolCallArgsBySessionRef.current = {};
+  }, []);
+
+  const bootstrapMainSessionAndSse = useCallback(
+    async (reason: string) => {
+      if (!apiReady || !clientReady || !clientId) {
+        return;
+      }
+      wbLog("bootstrap:main-session", { reason, effectiveApiBaseUrl: apiBaseUrl, clientId });
+
+      closeGlobalSse();
+
+      if (reason === "backend-url-changed") {
+        resetWorkbenchSessionState();
+      } else {
+        seenEventSeqRef.current.clear();
+        streamTurnBySessionRef.current[DEFAULT_SESSION_ID] = 0;
+        setActiveSessionId(DEFAULT_SESSION_ID);
+        setLatestErrorBySession((prev) => ({ ...prev, [DEFAULT_SESSION_ID]: undefined }));
+        setRuntimeBySession((prev) => ({
+          ...prev,
+          [DEFAULT_SESSION_ID]: {
+            status: "idle",
+            usage: prev[DEFAULT_SESSION_ID]?.usage ?? {
+              inputTokens: 0,
+              outputTokens: 0,
+              totalTokens: 0,
+            },
+          },
+        }));
+      }
+
+      try {
+        const result = await api.createSession({ session_id: DEFAULT_SESSION_ID });
+        wbLog("bootstrap:createSession:success", { reason, sessionId: result.session_id });
+        ensureSessionSlot(result.session_id);
+      } catch (error) {
+        const message = String(error);
+        wbLog("bootstrap:createSession:error", { reason, error: message });
+        setLatestErrorBySession((prev) => ({ ...prev, [DEFAULT_SESSION_ID]: message }));
+        setRuntimeBySession((prev) => ({
+          ...prev,
+          [DEFAULT_SESSION_ID]: {
+            ...(prev[DEFAULT_SESSION_ID] ?? defaultRuntimeModel),
+            status: "error",
+            errorMessage: message,
+          },
+        }));
+        return;
+      }
+
+      const streamUrl = api.streamAllUrl(clientId);
+      wbLog("sse:global:open", { streamUrl, clientId, reason });
+      const es = new EventSource(streamUrl);
+      globalStreamRef.current = es;
+      setSseGeneration((value) => value + 1);
+    },
+    [
+      api,
+      apiBaseUrl,
+      apiReady,
+      clientId,
+      clientReady,
+      closeGlobalSse,
+      defaultRuntimeModel,
+      resetWorkbenchSessionState,
+    ],
+  );
+
+  // ----- 启动：默认主会话 + 全局 SSE -----
   useEffect(() => {
     if (!apiReady || !clientReady || !clientId) {
       return;
@@ -485,55 +590,41 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
       configuredApiBaseUrl: resolvedApiBaseUrl,
       effectiveApiBaseUrl: apiBaseUrl,
     });
-    let mounted = true;
-    void api
-      .createSession({ session_id: DEFAULT_SESSION_ID })
-      .then((result) => {
-        if (mounted) {
-          wbLog("bootstrap:createSession:success", result);
-          ensureSessionSlot(result.session_id);
-        } else {
-          return;
-        }
-      })
-      .catch((error) => {
-        if (mounted) {
-          const message = String(error);
-          wbLog("bootstrap:createSession:error", { error: message });
-          setLatestErrorBySession((prev) => ({ ...prev, [DEFAULT_SESSION_ID]: message }));
-          setRuntimeBySession((prev) => ({
-            ...prev,
-            [DEFAULT_SESSION_ID]: {
-              ...(prev[DEFAULT_SESSION_ID] ?? defaultRuntimeModel),
-              status: "error",
-              errorMessage: message,
-            },
-          }));
-        } else {
-          return;
-        }
-      });
-    if (!globalStreamRef.current) {
-      const streamUrl = api.streamAllUrl(clientId);
-      wbLog("sse:global:open", { streamUrl, clientId });
-      const es = new EventSource(streamUrl);
-      globalStreamRef.current = es;
-      setSseConnected(true);
-    } else {
-      wbLog("sse:global:reuse");
-      setSseConnected(true);
-    }
-
-    return () => {
-      mounted = false;
-      if (globalStreamRef.current) {
-        wbLog("sse:cleanup:close-global");
-        globalStreamRef.current.close();
-        globalStreamRef.current = null;
-        setSseConnected(false);
+    let cancelled = false;
+    void bootstrapMainSessionAndSse("initial").then(() => {
+      if (cancelled) {
+        closeGlobalSse();
       }
+    });
+    return () => {
+      cancelled = true;
+      closeGlobalSse();
     };
-  }, [api, apiBaseUrl, apiReady, clientId, clientReady]);
+  }, [api, apiBaseUrl, apiReady, clientId, clientReady, bootstrapMainSessionAndSse, closeGlobalSse]);
+
+  // ----- 设置页修改真实后端后：重连主会话 SSE -----
+  useEffect(() => {
+    if (!settingsLoaded || !apiReady || !clientReady || !clientId) {
+      return;
+    }
+    const current = settings.backendBaseUrl ?? "";
+    if (trackedBackendBaseUrlRef.current === undefined) {
+      trackedBackendBaseUrlRef.current = current;
+      return;
+    }
+    if (trackedBackendBaseUrlRef.current === current) {
+      return;
+    }
+    trackedBackendBaseUrlRef.current = current;
+    void bootstrapMainSessionAndSse("backend-url-changed");
+  }, [
+    settings.backendBaseUrl,
+    settingsLoaded,
+    apiReady,
+    clientReady,
+    clientId,
+    bootstrapMainSessionAndSse,
+  ]);
 
   const activeThread = useMemo(
     () => activeThreads.find((item) => item.id === activeThreadId) || null,
@@ -1058,7 +1149,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
       es.onopen = null;
       es.onerror = null;
     };
-  }, [clientId, defaultRuntimeModel]);
+  }, [clientId, defaultRuntimeModel, sseGeneration]);
 
   /** 创建新会话并切换到该会话。 */
   const handleCreateSession = async () => {
