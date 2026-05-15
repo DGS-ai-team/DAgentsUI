@@ -13,9 +13,9 @@
     "build": "tsc -b && vite build && node ./scripts/sync-env-example-to-dist.mjs",
     "preview": "vite preview",
     "gen:types": "node ./scripts/generate-openapi-types.mjs ./openapi.json ./src/api/types.ts",
-    "electron:pack:win": "electron-builder --win portable --publish never",
+    "electron:pack:win": "electron-builder --win nsis --publish never",
     "electron:pack:mac": "electron-builder --mac zip --publish never",
-    "electron:package:win": "pnpm build && pnpm exec electron-builder --win portable --publish never",
+    "electron:package:win": "pnpm build && pnpm exec electron-builder --win nsis --publish never",
     "electron:package:mac": "pnpm build && pnpm exec electron-builder --mac zip --publish never"
   },
   "dependencies": {
