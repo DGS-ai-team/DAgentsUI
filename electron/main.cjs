@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain } = require("electron");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 
 const appVersion = (() => {
   try {
@@ -17,18 +18,53 @@ const DEFAULT_USER_SETTINGS = Object.freeze({
   showReasoningDetail: true,
 });
 
+const DEFAULT_REAL_BACKEND = "http://127.0.0.1:8000";
+
 /** 项目根目录 `.env` 解析结果缓存（仅主进程启动时读一次，用于 API_PROXY_PORT 等）。 */
 let rootDotEnvCache = null;
+
+function normalizeEnvValue(raw) {
+  let s = String(raw ?? "").trim();
+  if (
+    (s.startsWith('"') && s.endsWith('"')) ||
+    (s.startsWith("'") && s.endsWith("'"))
+  ) {
+    s = s.slice(1, -1).trim();
+  }
+  return s;
+}
+
+function parseEnvContent(content, into) {
+  let text = content;
+  if (text.charCodeAt(0) === 0xfeff) {
+    text = text.slice(1);
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    const idx = trimmed.indexOf("=");
+    if (idx < 0) {
+      continue;
+    }
+    const key = trimmed.slice(0, idx).trim();
+    const value = normalizeEnvValue(trimmed.slice(idx + 1));
+    if (key) {
+      into[key] = value;
+    }
+  }
+}
 
 function rootDotEnvCandidatePaths() {
   const list = [];
   if (app.isPackaged) {
-    // 与便携 exe / .app 内可执行文件同目录（用户最常把 .env 放在这里）
+    // 优先级从低到高：后读到的覆盖先读到的
     list.push(path.join(path.dirname(app.getPath("exe")), ".env"));
-    // electron-builder extraFiles 等多在 resources（Windows: app/resources；mac: Contents/Resources）
     list.push(path.join(process.resourcesPath, ".env"));
+  } else {
+    list.push(path.join(__dirname, "..", ".env"));
   }
-  list.push(path.join(__dirname, "..", ".env"));
   return list;
 }
 
@@ -37,39 +73,58 @@ function readRootDotEnv() {
     return rootDotEnvCache;
   }
   const out = {};
-  let loadedPath = null;
+  const loadedPaths = [];
   for (const envPath of rootDotEnvCandidatePaths()) {
     if (!fs.existsSync(envPath)) {
       continue;
     }
     try {
-      const content = fs.readFileSync(envPath, "utf8");
-      for (const line of content.split(/\r?\n/)) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith("#")) {
-          continue;
-        }
-        const idx = trimmed.indexOf("=");
-        if (idx < 0) {
-          continue;
-        }
-        const key = trimmed.slice(0, idx).trim();
-        const value = trimmed.slice(idx + 1).trim();
-        if (key) {
-          out[key] = value;
-        }
-      }
-      loadedPath = envPath;
-      break;
+      parseEnvContent(fs.readFileSync(envPath, "utf8"), out);
+      loadedPaths.push(envPath);
     } catch {
       // try next candidate
     }
   }
-  if (loadedPath) {
-    logger.log("[DAgentsUI] Loaded .env from", loadedPath);
+  if (loadedPaths.length > 0) {
+    logger.log("[DAgentsUI] Loaded .env from", loadedPaths);
+    if (out.API_BASE_URL) {
+      logger.log("[DAgentsUI] API_BASE_URL from .env", normalizeEnvValue(out.API_BASE_URL));
+    }
+  } else if (app.isPackaged) {
+    logger.log("[DAgentsUI] No .env found; checked", rootDotEnvCandidatePaths());
   }
   rootDotEnvCache = out;
   return out;
+}
+
+function apiBaseUrlFromDotEnvFiles() {
+  const value = normalizeEnvValue(readRootDotEnv().API_BASE_URL);
+  return stripTrailingSlash(value) || null;
+}
+
+/** 真实 DAgents API 根地址（与渲染进程 bootstrap 使用同一套优先级）。 */
+function resolveRealBackendUrl() {
+  const fromProcess = stripTrailingSlash(normalizeEnvValue(process.env.API_BASE_URL));
+  if (fromProcess) {
+    return fromProcess;
+  }
+  const fromDotEnv = apiBaseUrlFromDotEnvFiles();
+  if (fromDotEnv) {
+    return fromDotEnv;
+  }
+  const disk = readUserSettingsFromDisk();
+  const fromSettings = stripTrailingSlash(
+    typeof disk.backendBaseUrl === "string" ? disk.backendBaseUrl : "",
+  );
+  if (fromSettings) {
+    return fromSettings;
+  }
+  return DEFAULT_REAL_BACKEND;
+}
+
+function syncProxyUpstreamFromConfig() {
+  proxyUpstreamUrl = resolveRealBackendUrl();
+  return proxyUpstreamUrl;
 }
 
 /**
@@ -94,8 +149,8 @@ function resolveApiProxyListenPort() {
   return n;
 }
 
-/** 当前代理转发的真实 API 根地址（由渲染进程 bootstrap 时同步）。 */
-let proxyUpstreamUrl = "http://127.0.0.1:8000";
+/** 当前代理转发的真实 API 根地址（由 resolveRealBackendUrl / setProxyTarget 维护）。 */
+let proxyUpstreamUrl = DEFAULT_REAL_BACKEND;
 
 /** @type {import("http").Server | null} */
 let apiProxyServer = null;
@@ -137,13 +192,12 @@ function registerSettingsIpc() {
     if (Object.prototype.hasOwnProperty.call(safe, "backendBaseUrl")) {
       if (typeof safe.backendBaseUrl === "string" && stripTrailingSlash(safe.backendBaseUrl)) {
         next.backendBaseUrl = stripTrailingSlash(safe.backendBaseUrl);
-        proxyUpstreamUrl = next.backendBaseUrl;
       } else {
         delete next.backendBaseUrl;
-        proxyUpstreamUrl = "http://127.0.0.1:8000";
       }
     }
     writeUserSettingsToDisk(next);
+    syncProxyUpstreamFromConfig();
     return next;
   });
 
@@ -155,6 +209,66 @@ function registerLogIpc() {
     dir: logger.getLogDir(),
     file: logger.getLogFilePath(),
   }));
+}
+
+function clientIdCandidatePaths() {
+  const list = [];
+  if (app.isPackaged) {
+    list.push(path.join(path.dirname(app.getPath("exe")), ".electron-client-id"));
+    list.push(path.join(process.resourcesPath, ".electron-client-id"));
+  }
+  list.push(path.join(__dirname, "..", ".electron-client-id"));
+  return list;
+}
+
+function clientIdFilePath() {
+  return path.join(app.getPath("userData"), ".electron-client-id");
+}
+
+function readClientIdFromDisk() {
+  const userDataPath = clientIdFilePath();
+  if (fs.existsSync(userDataPath)) {
+    const saved = fs.readFileSync(userDataPath, "utf8").trim();
+    if (saved) {
+      return saved;
+    }
+  }
+  for (const legacyPath of clientIdCandidatePaths()) {
+    if (!fs.existsSync(legacyPath)) {
+      continue;
+    }
+    try {
+      const saved = fs.readFileSync(legacyPath, "utf8").trim();
+      if (saved) {
+        fs.mkdirSync(path.dirname(userDataPath), { recursive: true });
+        fs.writeFileSync(userDataPath, saved, "utf8");
+        return saved;
+      }
+    } catch {
+      // try next candidate
+    }
+  }
+  return null;
+}
+
+function getOrCreateClientId() {
+  const existing = readClientIdFromDisk();
+  if (existing) {
+    return existing;
+  }
+  const next = crypto.randomUUID();
+  const userDataPath = clientIdFilePath();
+  fs.mkdirSync(path.dirname(userDataPath), { recursive: true });
+  fs.writeFileSync(userDataPath, next, "utf8");
+  return next;
+}
+
+function registerRuntimeIpc() {
+  ipcMain.handle("runtime:getApiBaseUrl", () => apiBaseUrlFromDotEnvFiles());
+
+  ipcMain.handle("runtime:getRealBackendUrl", () => resolveRealBackendUrl());
+
+  ipcMain.handle("runtime:getOrCreateClientId", () => getOrCreateClientId());
 }
 
 function registerProxyIpc() {
@@ -175,13 +289,7 @@ function registerProxyIpc() {
 
 async function startEmbeddedApiProxy() {
   try {
-    const disk = readUserSettingsFromDisk();
-    const fromSettings = stripTrailingSlash(
-      typeof disk.backendBaseUrl === "string" ? disk.backendBaseUrl : "",
-    );
-    if (fromSettings) {
-      proxyUpstreamUrl = fromSettings;
-    }
+    syncProxyUpstreamFromConfig();
     const proxyOpts = { getTargetUrl: () => proxyUpstreamUrl };
     const listenPort = resolveApiProxyListenPort();
     if (listenPort !== undefined) {
@@ -224,6 +332,7 @@ app.whenReady().then(async () => {
   logger.log("[DAgentsUI] App starting", { version: appVersion, packaged: app.isPackaged });
   registerSettingsIpc();
   registerLogIpc();
+  registerRuntimeIpc();
   registerProxyIpc();
   await startEmbeddedApiProxy();
   createWindow();

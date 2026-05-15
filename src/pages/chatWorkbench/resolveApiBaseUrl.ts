@@ -6,7 +6,11 @@ export type ResolveWorkbenchApiBaseResult = {
   clientId: string;
 };
 
-const DEFAULT_REAL_BACKEND = "http://127.0.0.1:8000";
+export const DEFAULT_REAL_BACKEND = "http://127.0.0.1:8000";
+
+function isElectronRuntime(): boolean {
+  return typeof window !== "undefined" && Boolean(window.electronRuntime);
+}
 
 function generateFallbackClientId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -17,30 +21,31 @@ function generateFallbackClientId(): string {
 
 /**
  * 启动时确定最终 API Base URL 与 clientId。
- * 优先级：Electron 运行时 .env → 用户设置文件中的 backendBaseUrl → Vite 构建期 URL → 默认本机地址；
- * 在 Electron 且内嵌代理可用时，将真实后端注册到主进程代理并改用本地代理对外地址。
+ *
+ * Web：Vite 构建期 `VITE_API_BASE_URL` → 默认 8000。
+ * Electron：不使用 `VITE_API_BASE_URL`（避免本地 .env 与 CI 构建不一致）；
+ * 真实后端优先级为运行时 `.env` 的 `API_BASE_URL` → 用户设置 `backendBaseUrl` → 默认 8000。
+ * Electron 下将真实后端注册到主进程代理，页面实际请求本地代理地址。
  */
 export async function resolveWorkbenchApiBase(options: {
   resolvedViteUrl: string;
   log: WorkbenchBootstrapLog;
 }): Promise<ResolveWorkbenchApiBaseResult> {
-  const runtimeApiBaseUrl = String(window.electronRuntime?.getRuntimeApiBaseUrl?.() ?? "").trim();
-  const runtimeClientId = String(window.electronRuntime?.getOrCreateClientId?.() ?? "").trim();
+  const electron = isElectronRuntime();
+  const runtimeClientId = String(
+    (await window.electronRuntime?.getOrCreateClientId?.()) ?? "",
+  ).trim();
 
-  let realBackend = options.resolvedViteUrl || DEFAULT_REAL_BACKEND;
-  if (window.electronRuntime?.readUserSettings) {
+  let realBackend = electron
+    ? DEFAULT_REAL_BACKEND
+    : options.resolvedViteUrl || DEFAULT_REAL_BACKEND;
+
+  if (electron && window.electronRuntime?.getRealBackendUrl) {
     try {
-      const s = (await window.electronRuntime.readUserSettings()) as { backendBaseUrl?: unknown };
-      const fromFile = typeof s.backendBaseUrl === "string" ? s.backendBaseUrl.trim() : "";
-      if (fromFile) {
-        realBackend = fromFile.replace(/\/+$/, "");
-      }
-    } catch {
-      // 设置文件缺失或损坏时不阻断启动
+      realBackend = (await window.electronRuntime.getRealBackendUrl()).replace(/\/+$/, "");
+    } catch (error) {
+      options.log("bootstrap:real-backend:failed", { error: String(error) });
     }
-  }
-  if (runtimeApiBaseUrl) {
-    realBackend = runtimeApiBaseUrl;
   }
 
   let nextApiBaseUrl = realBackend;
@@ -48,6 +53,7 @@ export async function resolveWorkbenchApiBase(options: {
     try {
       await window.electronRuntime.setProxyTarget(realBackend);
       nextApiBaseUrl = await window.electronRuntime.getLocalApiProxyBaseUrl();
+      options.log("bootstrap:api-proxy", { realBackend, proxyBaseUrl: nextApiBaseUrl });
     } catch (error) {
       options.log("bootstrap:api-proxy:failed", { error: String(error) });
       nextApiBaseUrl = realBackend;

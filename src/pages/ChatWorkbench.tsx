@@ -8,7 +8,10 @@ import { SubAgentThreadView } from "../components/SubAgentThreadView";
 import { useSettings } from "../settings/SettingsContext";
 import { omitSessionKey } from "../utils/omitSessionKey";
 import { normalizeToolDisplayType } from "../utils/displayType";
-import { resolveWorkbenchApiBase } from "./chatWorkbench/resolveApiBaseUrl";
+import {
+  DEFAULT_REAL_BACKEND,
+  resolveWorkbenchApiBase,
+} from "./chatWorkbench/resolveApiBaseUrl";
 import type {
   ApprovalTask,
   ChatMessage,
@@ -20,7 +23,11 @@ import type {
 } from "../ui-contracts";
 
 const resolvedApiBaseUrl = String(import.meta.env.VITE_API_BASE_URL ?? "").trim();
-const defaultApiBaseUrl = "http://127.0.0.1:8000";
+const isElectronShell =
+  typeof window !== "undefined" && Boolean(window.electronRuntime);
+const initialApiBaseUrl = isElectronShell
+  ? DEFAULT_REAL_BACKEND
+  : resolvedApiBaseUrl || DEFAULT_REAL_BACKEND;
 
 const DEFAULT_SESSION_ID = "main";
 
@@ -197,7 +204,7 @@ function IconSettings() {
  */
 export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void }) {
   // 当前生效的后端 API 地址（启动后会用运行时配置覆盖）。
-  const [apiBaseUrl, setApiBaseUrl] = useState<string>(resolvedApiBaseUrl || defaultApiBaseUrl);
+  const [apiBaseUrl, setApiBaseUrl] = useState<string>(initialApiBaseUrl);
   // API 地址是否已经完成启动期解析。
   const [apiReady, setApiReady] = useState(false);
   // 当前客户端唯一标识（用于 SSE 过滤与请求归属）。
