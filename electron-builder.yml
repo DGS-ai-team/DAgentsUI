@@ -21,8 +21,8 @@ extraResources:
   - from: dist/env.example
     to: .env.example
 
-# 产物命名：Windows 为 NSIS 安装程序 exe；macOS 为 zip（内含 .app）
-artifactName: DAgents-${os}-${arch}.${ext}
+# 产物命名：mac zip 使用根级模板；Windows NSIS 安装包名单独在 nsis.artifactName（更有辨识度）
+artifactName: ${productName}-macOS-arm64-v${version}.${ext}
 
 win:
   target:
@@ -32,8 +32,9 @@ win:
   # 签名：CI 中设置 CSC_LINK（.pfx 路径）与 CSC_KEY_PASSWORD；本地可设环境变量或导入证书到存储区
   verifyUpdateCodeSignature: false
 
-# NSIS 安装向导：非一键安装，可选安装目录；卸载时默认保留用户数据（见 deleteAppDataOnUninstall）
+# NSIS：安装包文件名 + 向导选项
 nsis:
+  artifactName: ${productName}-Windows-x64-Setup-v${version}.${ext}
   # 非一键安装，可选安装目录；卸载时默认保留用户数据（见 deleteAppDataOnUninstall）
   oneClick: false
   # 可选安装目录
