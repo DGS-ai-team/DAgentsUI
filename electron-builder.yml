@@ -1,0 +1,68 @@
+# 输出目录必须与 Vite 的 dist/ 分离，否则打包会覆盖前端产物。
+appId: com.dagents.ui
+productName: DAgentsUI
+copyright: Copyright © DAgentsUI
+
+directories:
+  output: electron-release
+  buildResources: build
+
+files:
+  - package.json
+  - dist/**/*
+  - electron/**/*
+  - node_modules/**/*
+
+asar: true
+
+# 环境变量模板：构建后生成 dist/env.example（与根 .env.example 同内容），再从该路径 extraResources，
+# 避免「源路径以 . 开头」在部分 electron-builder / portable 组合下未被拷贝；产物位于 resources/.env.example。
+extraResources:
+  - from: dist/env.example
+    to: .env.example
+
+# 产物命名：mac zip 使用根级模板；Windows NSIS 安装包名单独在 nsis.artifactName（更有辨识度）
+artifactName: ${productName}-macOS-arm64-v${version}.${ext}
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.png
+  # 签名：CI 中设置 CSC_LINK（.pfx 路径）与 CSC_KEY_PASSWORD；本地可设环境变量或导入证书到存储区
+  verifyUpdateCodeSignature: false
+
+# NSIS：安装包文件名 + 向导选项
+nsis:
+  artifactName: ${productName}-Windows-x64-Setup-v${version}.${ext}
+  # 非一键安装，可选安装目录；卸载时默认保留用户数据（见 deleteAppDataOnUninstall）
+  oneClick: false
+  # 可选安装目录
+  allowToChangeInstallationDirectory: true
+  # 允许提升权限
+  allowElevation: true
+  # 创建桌面快捷方式
+  createDesktopShortcut: true
+  # 创建开始菜单快捷方式
+  createStartMenuShortcut: true
+  # 卸载时默认保留用户数据
+  deleteAppDataOnUninstall: false
+  # 安装完成后运行
+  runAfterFinish: false
+
+mac:
+  target:
+    - target: zip
+      arch: [arm64]
+  # icon
+  icon: build/icon.png
+  # 应用类别
+  category: public.app-category.developer-tools
+  # 硬运行时
+  hardenedRuntime: true
+  # 权限
+  entitlements: build/entitlements.mac.plist
+  # 继承权限
+  entitlementsInherit: build/entitlements.mac.plist
+  # 公证：在仓库中配置 APPLE_ID、APPLE_APP_SPECIFIC_PASSWORD、APPLE_TEAM_ID 后改为 true
+  notarize: false

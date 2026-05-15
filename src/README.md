@@ -5,15 +5,18 @@
 ## 当前结构
 
 - `main.tsx`：React 挂载入口。
-- `App.tsx`：应用根组件（当前渲染 `ChatWorkbench`）。
+- `App.tsx`：应用根组件（工作台与设置视图切换；`ChatWorkbench` 保持挂载，设置页叠放显示）。
 - `styles.css`：全局设计令牌与样式系统。
 - `pages/ChatWorkbench.tsx`：工作台页面（主对话 + 运行状态 + 子线程）。
+- `pages/chatWorkbench/resolveApiBaseUrl.ts`：启动期解析 API 基址、clientId 与 Electron 内嵌代理。
+- `pages/SettingsPage.tsx`：用户设置（含 Electron 持久化字段）。
 - `components/MainChatPanel.tsx`：主聊天流与输入区。
 - `components/ApprovalToolBubble.tsx`：工具调用审批/执行状态气泡（内联于聊天流）。
 - `components/RuntimeStatusPanel.tsx`：运行状态与 tokens。
 - `components/SubAgentThreadTabs.tsx`：子 Agent 线程切换。
 - `components/SubAgentThreadView.tsx`：子线程实时输出展示。
-- `components/ui.tsx`：通用 UI 小组件（状态 pill、risk badge 等）。
+- `components/ui.tsx`：通用 UI 小组件（如状态 pill、数字格式化）。
+- `utils/omitSessionKey.ts`：按会话分桶的状态表删键（删除会话时复用）。
 - `api/`：API 契约与调用封装（`types.ts` 自动生成，`client.ts` 手写封装）。
 - `ui-contracts.ts`：前端 UI 类型契约与事件类型。
 

@@ -5,6 +5,7 @@
 ## 当前文件
 
 - `generate-openapi-types.mjs`：从 `openapi.json` 生成 `src/api/types.ts`。
+- `electron-dev.cjs`：开发态启动 Vite（固定端口）后拉起 Electron，供 `pnpm dev:electron` 使用。
 
 ## 使用方式
 

@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import type {
   ApprovalTask,
@@ -11,20 +13,56 @@ import { ApprovalToolBubble } from "./ApprovalToolBubble";
 import { ToolExecutionBubble } from "./ToolExecutionBubble";
 
 const ROLE_HINT: Partial<Record<MessageRole, string>> = {
-  user: "you",
   reasoning: "thinking",
   tool: "tool",
   system: "system",
 };
 
+function normalizeBubbleContent(message: ChatMessage): string {
+  const raw = String(message.content ?? "").replace(/\r\n/g, "\n");
+  if (message.role === "assistant" || message.role === "reasoning") {
+    return raw.replace(/^\n+/, "").replace(/\n+$/, "");
+  }
+  return raw;
+}
+
 function MessageBubble({ message }: { message: ChatMessage }) {
   const hint = ROLE_HINT[message.role];
+  const content = normalizeBubbleContent(message);
+  if (message.generatingPending) {
+    return (
+      <div className="msg msg--assistant msg--generating">
+        <div className="msg__body msg__body--hint-only">
+          <div className="msg__hint msg__hint--stream-meta">
+            <span className="msg__meta-label">generating</span>
+            <ThinkingDots />
+          </div>
+        </div>
+      </div>
+    );
+  }
+  if (message.role === "reasoning" && message.reasoningCollapsed) {
+    return (
+      <div className="msg msg--reasoning msg--reasoning-collapsed">
+        <div className="msg__body msg__body--hint-only">
+          <div className="msg__hint msg__hint--stream-meta">
+            <span className="msg__meta-label">thinking</span>
+            {message.reasoningPhaseActive ? <ThinkingDots /> : null}
+          </div>
+        </div>
+      </div>
+    );
+  }
   if (message.role === "tool") {
     return (
       <div className="msg msg--tool-centered">
         <div className="msg__body msg__body--wide">
-          {hint ? <div className="msg__hint">{hint}</div> : null}
-          <div className="msg__bubble msg__bubble--tool-centered">{message.content}</div>
+          {hint ? (
+            <div className="msg__hint msg__hint--stream-meta">
+              <span className="msg__meta-label">{hint}</span>
+            </div>
+          ) : null}
+          <div className="msg__bubble msg__bubble--tool-centered">{content}</div>
         </div>
       </div>
     );
@@ -33,10 +71,51 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   return (
     <div className={`msg msg--${message.role}`}>
       <div className="msg__body">
-        {hint ? <div className="msg__hint">{hint}</div> : null}
-        <div className="msg__bubble">{message.content}</div>
+        {hint ? (
+          <div
+            className={`msg__hint${message.role === "reasoning" || message.role === "system" ? " msg__hint--stream-meta" : ""}`}
+          >
+            <span className={message.role === "reasoning" || message.role === "system" ? "msg__meta-label" : undefined}>
+              {hint}
+            </span>
+            {message.reasoningPhaseActive ? <ThinkingDots /> : null}
+          </div>
+        ) : null}
+        {message.role === "assistant" ? (
+          <div className="msg__bubble msg__bubble--assistant-md">
+            <div className="tool-exec-bubble__markdown assistant-msg__md">
+              <Markdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  a: ({ href, children, ...rest }) => (
+                    <a href={href} target="_blank" rel="noopener noreferrer" {...rest}>
+                      {children}
+                    </a>
+                  ),
+                  img: ({ src, alt, ...rest }) => (
+                    <img src={src} alt={alt ?? ""} className="tool-exec-bubble__md-img" {...rest} />
+                  ),
+                }}
+              >
+                {content}
+              </Markdown>
+            </div>
+          </div>
+        ) : (
+          <div className="msg__bubble">{content}</div>
+        )}
       </div>
     </div>
+  );
+}
+
+function ThinkingDots() {
+  return (
+    <span className="msg__meta-dots" aria-hidden="true">
+      <span className="msg__meta-dot" />
+      <span className="msg__meta-dot" />
+      <span className="msg__meta-dot" />
+    </span>
   );
 }
 
@@ -57,6 +136,14 @@ function buildStream(
 ): StreamItem[] {
   const items: StreamItem[] = [];
   for (const m of messages) {
+    if (m.generatingPending) {
+      items.push({ key: `m:${m.id}`, ts: m.createdAt, kind: "message", message: m });
+      continue;
+    }
+    if (m.role === "reasoning" && m.reasoningCollapsed) {
+      items.push({ key: `m:${m.id}`, ts: m.createdAt, kind: "message", message: m });
+      continue;
+    }
     if (!String(m.content ?? "").trim()) {
       continue;
     }

@@ -1,4 +1,8 @@
 import type { ApprovalTask, ToolCallDecision, ToolCallItem } from "../ui-contracts";
+import { DisplayTypeContentPreview } from "./DisplayTypeContentPreview";
+import { EditFileApprovalArgsPreview } from "./EditFileApprovalArgsPreview";
+import { isEditFileToolName, parseEditFileApprovalArguments } from "../utils/editFileTool";
+import { fileDisplayName, isWriteFileToolName, parseWriteFileArguments } from "../utils/writeFileTool";
 
 export interface ApprovalToolBubbleProps {
   task: ApprovalTask;
@@ -79,13 +83,35 @@ function ToolCallRow({
 }) {
   const decision = decisionForToolCall(task, toolCall.id);
   const handled = decision !== null;
+  const writeFileArgs = isWriteFileToolName(toolCall.name)
+    ? parseWriteFileArguments(toolCall.arguments)
+    : null;
+  const editFileModel = isEditFileToolName(toolCall.name)
+    ? parseEditFileApprovalArguments(toolCall.arguments)
+    : null;
 
   return (
     <li className="approval-tool-item">
       <header className="approval-tool-item__head">
-        <div className="approval-bubble__title">
-          <span className="approval-bubble__name">{toolCall.name}</span>
-        </div>
+        {writeFileArgs ? (
+          <div className="write-file-tool__title-row">
+            <span className="msg__meta-label write-file-tool__tag">write_file</span>
+            <span className="write-file-tool__filename" title={writeFileArgs.path || undefined}>
+              {writeFileArgs.path ? fileDisplayName(writeFileArgs.path) : "（未提供路径）"}
+            </span>
+          </div>
+        ) : editFileModel ? (
+          <div className="write-file-tool__title-row">
+            <span className="msg__meta-label write-file-tool__tag">edit_file</span>
+            <span className="write-file-tool__filename" title={editFileModel.path || undefined}>
+              {editFileModel.path ? fileDisplayName(editFileModel.path) : "（未提供路径）"}
+            </span>
+          </div>
+        ) : (
+          <div className="approval-bubble__title">
+            <span className="approval-bubble__name">{toolCall.name}</span>
+          </div>
+        )}
         <div className="approval-tool-item__right">
           <ToolStatusPill decision={decision} running={running} completed={completed} />
           {!handled && onDecide ? (
@@ -111,9 +137,23 @@ function ToolCallRow({
         </div>
       </header>
 
-      <pre className="tool-card__args tool-card__args--compact">
-        {JSON.stringify(toolCall.arguments, null, 2)}
-      </pre>
+      {writeFileArgs ? (
+        <div className="write-file-tool__preview">
+          {writeFileArgs.content.trim() ? (
+            <DisplayTypeContentPreview displayType={writeFileArgs.displayType} text={writeFileArgs.content} />
+          ) : (
+            <div className="write-file-tool__empty">（无写入内容）</div>
+          )}
+        </div>
+      ) : editFileModel ? (
+        <div className="edit-file-approval__wrap">
+          <EditFileApprovalArgsPreview model={editFileModel} />
+        </div>
+      ) : (
+        <pre className="tool-card__args tool-card__args--compact">
+          {JSON.stringify(toolCall.arguments, null, 2)}
+        </pre>
+      )}
     </li>
   );
 }
@@ -132,7 +172,9 @@ export function ApprovalToolBubble({
   return (
     <div className="msg msg--approval">
       <div className="msg__body msg__body--wide">
-        <div className="msg__hint">tool_call</div>
+        <div className="msg__hint msg__hint--stream-meta">
+          <span className="msg__meta-label">tool_call</span>
+        </div>
         <div className="approval-bubble">
           <ul className="approval-tool-list">
             {task.payload.args.tool_calls.map((toolCall) => (

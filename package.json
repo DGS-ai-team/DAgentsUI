@@ -3,21 +3,35 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "main": "electron/main.cjs",
+  "author": "DAgentsUI",
+  "description": "DAgents Web / Electron 对话工作台",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "dev:web": "vite",
+    "dev:electron": "node ./scripts/electron-dev.cjs",
+    "build": "tsc -b && vite build && node ./scripts/sync-env-example-to-dist.mjs",
     "preview": "vite preview",
-    "gen:types": "node ./scripts/generate-openapi-types.mjs ./openapi.json ./src/api/types.ts"
+    "gen:types": "node ./scripts/generate-openapi-types.mjs ./openapi.json ./src/api/types.ts",
+    "electron:pack:win": "node ./scripts/electron-builder-with-china-mirror.mjs --win nsis --publish never",
+    "electron:pack:mac": "electron-builder --mac zip --publish never",
+    "electron:package:win": "pnpm build && node ./scripts/electron-builder-with-china-mirror.mjs --win nsis --publish never",
+    "electron:package:mac": "pnpm build && pnpm exec electron-builder --mac zip --publish never"
   },
   "dependencies": {
+    "http-proxy": "^1.18.1",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.10.1",
+    "@types/http-proxy": "^1.17.15",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^5.0.0",
+    "electron": "^37.4.0",
+    "electron-builder": "^26.8.1",
     "typescript": "^5.9.2",
     "vite": "^7.1.3"
   }
