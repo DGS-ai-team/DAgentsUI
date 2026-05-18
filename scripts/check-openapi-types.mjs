@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
-const sourceOpenapi = path.join(repoRoot, "openapi.json");
 const generatedTypes = path.join(repoRoot, "src", "api", "types.ts");
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "dagents-openapi-types-"));
 const tempTypes = path.join(tempDir, "types.ts");
