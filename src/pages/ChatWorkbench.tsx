@@ -9,6 +9,17 @@ import { useSettings } from "../settings/SettingsContext";
 import { omitSessionKey } from "../utils/omitSessionKey";
 import { normalizeToolDisplayType } from "../utils/displayType";
 import {
+  applyToolCallDeltaChunks,
+  extractAssistantContentFromToolPayload,
+  finalizeToolCallBufferFromItems,
+  isErrorTurnFinishReason,
+  isSegmentEndFinishReason,
+  isTerminalTurnFinishReason,
+  parseFinishReason,
+  toolCallDeltaSlotsToDrafts,
+  type ToolCallDeltaSlot,
+} from "../utils/toolCallStream";
+import {
   DEFAULT_REAL_BACKEND,
   resolveWorkbenchApiBase,
 } from "./chatWorkbench/resolveApiBaseUrl";
@@ -17,6 +28,7 @@ import type {
   ChatMessage,
   RuntimeState,
   SubAgentThread,
+  ToolCallDraft,
   ToolExecutionRecord,
   ToolCallDecision,
   ToolCallItem,
@@ -230,10 +242,15 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
   const [messagesBySession, setMessagesBySession] = useState<Record<string, ChatMessage[]>>({});
   // 按会话维度存储待审批工具任务。
   const [approvalsBySession, setApprovalsBySession] = useState<Record<string, ApprovalTask[]>>({});
+  const approvalsBySessionRef = useRef(approvalsBySession);
+  useEffect(() => {
+    approvalsBySessionRef.current = approvalsBySession;
+  }, [approvalsBySession]);
   // 按会话维度存储工具执行记录（running/success/error 等）。
   const [toolExecutionsBySession, setToolExecutionsBySession] = useState<Record<string, ToolExecutionRecord[]>>(
     {},
   );
+  const [toolCallDraftsBySession, setToolCallDraftsBySession] = useState<Record<string, ToolCallDraft[]>>({});
   // 按会话维度存储子代理线程列表。
   const [threadsBySession, setThreadsBySession] = useState<Record<string, SubAgentThread[]>>({});
   // 按会话维度记录当前选中的子线程 ID。
@@ -285,6 +302,8 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
   const responseStartedByRequestRef = useRef<Set<string>>(new Set());
   /** SSE tool_call 阶段按 tool_call_id 缓存的调用参数，供 tool_result 合并展示（如 read_file 路径）。 */
   const pendingToolCallArgsBySessionRef = useRef<Record<string, Record<string, Record<string, unknown>>>>({});
+  /** tool_call_delta 按 request 维度的 index 缓冲（未定稿，不触发执行）。 */
+  const toolCallDeltaBufferRef = useRef<Record<string, Map<number, ToolCallDeltaSlot>>>({});
   const { settings, loaded: settingsLoaded } = useSettings();
   const showReasoningDetailRef = useRef(settings.showReasoningDetail);
   useEffect(() => {
@@ -297,6 +316,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
   const activeApprovals = approvalsBySession[activeSessionId] ?? [];
   // 当前会话对应的工具执行记录（无则为空数组）。
   const activeToolExecutions = toolExecutionsBySession[activeSessionId] ?? [];
+  const activeToolCallDrafts = toolCallDraftsBySession[activeSessionId] ?? [];
   // 当前会话对应的子代理线程列表（无则为空数组）。
   const activeThreads = threadsBySession[activeSessionId] ?? [];
   // 当前会话选中的子线程 ID。
@@ -417,6 +437,78 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     });
   };
 
+  const toolCallDraftBufferKey = (sid: string, requestId: string) => `${sid}::${requestId}`;
+
+  const syncToolCallDraftsForRequest = useCallback((sid: string, requestId: string) => {
+    const buffer = toolCallDeltaBufferRef.current[toolCallDraftBufferKey(sid, requestId)];
+    const drafts = buffer ? toolCallDeltaSlotsToDrafts(buffer) : [];
+    setToolCallDraftsBySession((prev) => ({ ...prev, [sid]: drafts }));
+  }, []);
+
+  const clearToolCallDraftsForRequest = useCallback((sid: string, requestId: string) => {
+    delete toolCallDeltaBufferRef.current[toolCallDraftBufferKey(sid, requestId)];
+    setToolCallDraftsBySession((prev) => ({ ...prev, [sid]: [] }));
+  }, []);
+
+  const registerRunningToolCallsForSession = useCallback(
+    (sid: string, requestId: string, toolCalls: ToolCallItem[]) => {
+      const prevBucket = pendingToolCallArgsBySessionRef.current[sid] ?? {};
+      const bucket: Record<string, Record<string, unknown>> = { ...prevBucket };
+      const runningIds: string[] = [];
+
+      for (const tc of toolCalls) {
+        const toolCallId = String(tc.id ?? "").trim();
+        if (!toolCallId) {
+          continue;
+        }
+        const args = normalizeToolCallItemArguments(tc.arguments);
+        bucket[toolCallId] = { ...(bucket[toolCallId] ?? {}), ...args };
+        runningIds.push(toolCallId);
+        upsertToolExecutionForSession(sid, {
+          id: `${requestId}:${toolCallId}`,
+          sessionId: sid,
+          requestId,
+          createdAt: Date.now(),
+          toolCallId,
+          toolName: tc.name || "tool",
+          arguments: args,
+          status: "running",
+          summary: buildToolExecutionSummary(tc.name || "tool", "running"),
+        });
+      }
+
+      if (runningIds.length > 0) {
+        pendingToolCallArgsBySessionRef.current[sid] = bucket;
+        setRunningToolCallIdsBySession((prev) => {
+          const current = prev[sid] ?? [];
+          const merged = [...current];
+          for (const id of runningIds) {
+            if (!merged.includes(id)) {
+              merged.push(id);
+            }
+          }
+          return { ...prev, [sid]: merged };
+        });
+      }
+    },
+    [],
+  );
+
+  const markSessionAgentWorking = useCallback(
+    (sid: string) => {
+      setRuntimeBySession((prev) => ({
+        ...prev,
+        [sid]: {
+          ...(prev[sid] ?? defaultRuntimeModel),
+          status: "running",
+          errorMessage: undefined,
+        },
+      }));
+      setSendingBySession((prev) => ({ ...prev, [sid]: true }));
+    },
+    [defaultRuntimeModel],
+  );
+
   /**
    * 删除会话及其关联状态。
    * - 默认会话不可删除
@@ -442,6 +534,12 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     setMessagesBySession((prev) => omitSessionKey(prev, sid));
     setApprovalsBySession((prev) => omitSessionKey(prev, sid));
     setToolExecutionsBySession((prev) => omitSessionKey(prev, sid));
+    setToolCallDraftsBySession((prev) => omitSessionKey(prev, sid));
+    for (const key of Object.keys(toolCallDeltaBufferRef.current)) {
+      if (key.startsWith(`${sid}::`)) {
+        delete toolCallDeltaBufferRef.current[key];
+      }
+    }
     setThreadsBySession((prev) => omitSessionKey(prev, sid));
     setActiveThreadBySession((prev) => omitSessionKey(prev, sid));
     setSubmittingToolCallIdsBySession((prev) => omitSessionKey(prev, sid));
@@ -498,6 +596,8 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     setMessagesBySession({});
     setApprovalsBySession({});
     setToolExecutionsBySession({});
+    setToolCallDraftsBySession({});
+    toolCallDeltaBufferRef.current = {};
     setThreadsBySession({});
     setActiveThreadBySession({});
     setSubmittingToolCallIdsBySession({});
@@ -764,6 +864,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
           } else {
             appendCollapsedReasoningPlaceholder(sid, requestId);
           }
+          markSessionAgentWorking(sid);
         } else {
           return;
         }
@@ -849,6 +950,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
               return { ...prev, [sid]: next };
             }
           });
+          markSessionAgentWorking(sid);
         }
       } else if (eventType === "approval_required") {
         removeGeneratingPlaceholder(sid, requestId);
@@ -888,6 +990,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
                 : [...current, approvalTask],
             };
           });
+          markSessionAgentWorking(sid);
         }
       } else if (eventType === "usage") {
         finalizeCollapsedReasoningPhase(sid, requestId);
@@ -908,6 +1011,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
       } else if (eventType === "error") {
         removeGeneratingPlaceholder(sid, requestId);
         finalizeCollapsedReasoningPhase(sid, requestId);
+        clearToolCallDraftsForRequest(sid, requestId);
         streamTurnBySessionRef.current[sid] = (streamTurnBySessionRef.current[sid] ?? 0) + 1;
         const message = typeof payload.message === "string" ? payload.message : "运行异常";
         // 当前轮次已异常终止，未处理的审批已失效，避免 UI 继续显示“待审批”。
@@ -923,15 +1027,42 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
       } else if (eventType === "done") {
         removeGeneratingPlaceholder(sid, requestId);
         finalizeCollapsedReasoningPhase(sid, requestId);
-        streamTurnBySessionRef.current[sid] = (streamTurnBySessionRef.current[sid] ?? 0) + 1;
-        // 注意：后端在需要人工审批时会在 approval_required 之后立刻再发 done（表示本轮流式输出结束，
-        // 但仍等待 resume），此处不得清空 approvals，否则审批 UI 会被同一 tick 内的批处理冲掉。
-        setRuntimeBySession((prev) => ({
-          ...prev,
-          [sid]: { ...(prev[sid] ?? defaultRuntimeModel), status: "done" },
-        }));
-        setSendingBySession((prev) => ({ ...prev, [sid]: false }));
-        setSubmittingToolCallIdsBySession((prev) => ({ ...prev, [sid]: [] }));
+        const finishReason = parseFinishReason(payload);
+        const hasPendingApproval = (approvalsBySessionRef.current[sid] ?? []).some((task) => !task.handled);
+        wbLog("sse:done", { sessionId: sid, requestId, finishReason, hasPendingApproval });
+
+        if (isTerminalTurnFinishReason(finishReason)) {
+          clearToolCallDraftsForRequest(sid, requestId);
+          streamTurnBySessionRef.current[sid] = (streamTurnBySessionRef.current[sid] ?? 0) + 1;
+          setRuntimeBySession((prev) => ({
+            ...prev,
+            [sid]: { ...(prev[sid] ?? defaultRuntimeModel), status: "done", errorMessage: undefined },
+          }));
+          setSendingBySession((prev) => ({ ...prev, [sid]: false }));
+          setSubmittingToolCallIdsBySession((prev) => ({ ...prev, [sid]: [] }));
+        } else if (isErrorTurnFinishReason(finishReason)) {
+          clearToolCallDraftsForRequest(sid, requestId);
+          streamTurnBySessionRef.current[sid] = (streamTurnBySessionRef.current[sid] ?? 0) + 1;
+          const message =
+            typeof payload.message === "string"
+              ? payload.message
+              : finishReason === "resume_rejected"
+                ? "已拒绝继续执行"
+                : "运行异常";
+          setLatestErrorBySession((prev) => ({ ...prev, [sid]: message }));
+          setRuntimeBySession((prev) => ({
+            ...prev,
+            [sid]: { ...(prev[sid] ?? defaultRuntimeModel), status: "error", errorMessage: message },
+          }));
+          setSendingBySession((prev) => ({ ...prev, [sid]: false }));
+          setSubmittingToolCallIdsBySession((prev) => ({ ...prev, [sid]: [] }));
+        } else if (isSegmentEndFinishReason(finishReason) || hasPendingApproval) {
+          // 流式输出段结束，但 Agent 仍在执行工具或等待审批/后续输出。
+          markSessionAgentWorking(sid);
+        } else {
+          wbLog("sse:done:non-terminal", { finishReason, hasPendingApproval });
+          markSessionAgentWorking(sid);
+        }
       } else if (eventType === "subagent_started") {
         removeGeneratingPlaceholder(sid, requestId);
         finalizeCollapsedReasoningPhase(sid, requestId);
@@ -1008,43 +1139,42 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
             ),
           }));
         }
+      } else if (eventType === "tool_call_delta") {
+        removeGeneratingPlaceholder(sid, requestId);
+        finalizeCollapsedReasoningPhase(sid, requestId);
+        const deltaChunks = payload.tool_calls;
+        if (Array.isArray(deltaChunks) && deltaChunks.length > 0) {
+          const bufferKey = toolCallDraftBufferKey(sid, requestId);
+          if (!toolCallDeltaBufferRef.current[bufferKey]) {
+            toolCallDeltaBufferRef.current[bufferKey] = new Map();
+          }
+          const changed = applyToolCallDeltaChunks(
+            toolCallDeltaBufferRef.current[bufferKey],
+            deltaChunks,
+          );
+          if (changed) {
+            syncToolCallDraftsForRequest(sid, requestId);
+          }
+        }
+        markSessionAgentWorking(sid);
       } else if (eventType === "tool_call") {
         finalizeCollapsedReasoningPhase(sid, requestId);
         const toolCalls = extractToolCallsFromPayload(payload);
         if (toolCalls.length > 0) {
-          const prevBucket = pendingToolCallArgsBySessionRef.current[sid] ?? {};
-          const bucket: Record<string, Record<string, unknown>> = { ...prevBucket };
-          for (const tc of toolCalls) {
-            const id = String(tc.id ?? "").trim();
-            if (!id) {
-              continue;
-            }
-            const args = normalizeToolCallItemArguments(tc.arguments);
-            bucket[id] = { ...(bucket[id] ?? {}), ...args };
+          const bufferKey = toolCallDraftBufferKey(sid, requestId);
+          if (!toolCallDeltaBufferRef.current[bufferKey]) {
+            toolCallDeltaBufferRef.current[bufferKey] = new Map();
           }
-          pendingToolCallArgsBySessionRef.current[sid] = bucket;
-          setToolExecutionsBySession((prev) => {
-            const sessionRows = prev[sid] ?? [];
-            let changed = false;
-            const nextRows = sessionRows.map((row) => {
-              const injected = bucket[row.toolCallId];
-              if (!injected || Object.keys(injected).length === 0) {
-                return row;
-              }
-              const merged = { ...injected, ...row.arguments };
-              if (JSON.stringify(merged) === JSON.stringify(row.arguments)) {
-                return row;
-              }
-              changed = true;
-              return { ...row, arguments: merged };
-            });
-            return changed ? { ...prev, [sid]: nextRows } : prev;
-          });
+          finalizeToolCallBufferFromItems(toolCallDeltaBufferRef.current[bufferKey], toolCalls);
+          clearToolCallDraftsForRequest(sid, requestId);
+          registerRunningToolCallsForSession(sid, requestId, toolCalls);
         }
-        if (content) {
+        const assistantContent = extractAssistantContentFromToolPayload(payload);
+        if (assistantContent) {
           removeGeneratingPlaceholder(sid, requestId);
-          appendMessageForSession(sid, createMessage(sid, "assistant", content, requestId));
+          appendMessageForSession(sid, createMessage(sid, "assistant", assistantContent, requestId));
         }
+        markSessionAgentWorking(sid);
       } else {
         // ignore unsupported event types
       }
@@ -1099,6 +1229,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     const eventTypes = [
       "assistant",
       "reasoning",
+      "tool_call_delta",
       "tool_call",
       "tool_result",
       "approval_required",
@@ -1149,7 +1280,15 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
       es.onopen = null;
       es.onerror = null;
     };
-  }, [clientId, defaultRuntimeModel, sseGeneration]);
+  }, [
+    clientId,
+    defaultRuntimeModel,
+    sseGeneration,
+    clearToolCallDraftsForRequest,
+    markSessionAgentWorking,
+    registerRunningToolCallsForSession,
+    syncToolCallDraftsForRequest,
+  ]);
 
   /** 创建新会话并切换到该会话。 */
   const handleCreateSession = async () => {
@@ -1397,6 +1536,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
             messages={activeMessages}
             approvals={activeApprovals}
             toolExecutions={activeToolExecutions}
+            toolCallDrafts={activeToolCallDrafts}
             submittingToolCallIds={activeSubmittingToolCallIds}
             runningToolCallIds={activeRunningToolCallIds}
             completedToolCallIds={activeCompletedToolCallIds}

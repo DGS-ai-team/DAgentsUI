@@ -7,9 +7,11 @@ import type {
   ChatMessage,
   MainChatPanelProps,
   MessageRole,
+  ToolCallDraft,
   ToolExecutionRecord,
 } from "../ui-contracts";
 import { ApprovalToolBubble } from "./ApprovalToolBubble";
+import { ToolCallDraftBubble } from "./ToolCallDraftBubble";
 import { ToolExecutionBubble } from "./ToolExecutionBubble";
 
 const ROLE_HINT: Partial<Record<MessageRole, string>> = {
@@ -121,6 +123,7 @@ function ThinkingDots() {
 
 type StreamItem =
   | { key: string; ts: number; kind: "message"; message: ChatMessage }
+  | { key: string; ts: number; kind: "tool_call_draft"; draft: ToolCallDraft }
   | { key: string; ts: number; kind: "tool_execution"; execution: ToolExecutionRecord }
   | {
       key: string;
@@ -133,6 +136,7 @@ function buildStream(
   messages: ChatMessage[],
   approvals: ApprovalTask[],
   toolExecutions: ToolExecutionRecord[],
+  toolCallDrafts: ToolCallDraft[],
 ): StreamItem[] {
   const items: StreamItem[] = [];
   for (const m of messages) {
@@ -148,6 +152,14 @@ function buildStream(
       continue;
     }
     items.push({ key: `m:${m.id}`, ts: m.createdAt, kind: "message", message: m });
+  }
+  for (const draft of toolCallDrafts) {
+    items.push({
+      key: `d:${draft.index}:${draft.toolCallId ?? "pending"}`,
+      ts: draft.updatedAt,
+      kind: "tool_call_draft",
+      draft,
+    });
   }
   for (const execution of toolExecutions) {
     items.push({
@@ -168,6 +180,7 @@ export function MainChatPanel({
   messages,
   approvals = [],
   toolExecutions = [],
+  toolCallDrafts = [],
   submittingToolCallIds,
   runningToolCallIds,
   completedToolCallIds,
@@ -180,8 +193,8 @@ export function MainChatPanel({
   const streamRef = useRef<HTMLDivElement | null>(null);
 
   const stream = useMemo(
-    () => buildStream(messages, approvals, toolExecutions),
-    [messages, approvals, toolExecutions],
+    () => buildStream(messages, approvals, toolExecutions, toolCallDrafts),
+    [messages, approvals, toolExecutions, toolCallDrafts],
   );
 
   useEffect(() => {
@@ -238,6 +251,9 @@ export function MainChatPanel({
           stream.map((item) => {
             if (item.kind === "message") {
               return <MessageBubble key={item.key} message={item.message} />;
+            }
+            if (item.kind === "tool_call_draft") {
+              return <ToolCallDraftBubble key={item.key} draft={item.draft} />;
             }
             if (item.kind === "tool_execution") {
               return <ToolExecutionBubble key={item.key} item={item.execution} />;

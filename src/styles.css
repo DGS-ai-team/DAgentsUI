@@ -1858,6 +1858,38 @@ input {
   background: #fef2f2;
 }
 
+.tool-call-draft__bubble {
+  border: 1px dashed var(--color-border);
+  background: #f8fafc;
+}
+
+.tool-call-draft__title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.tool-call-draft__meta {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-bottom: 6px;
+}
+
+.tool-call-draft__meta code {
+  font-size: 10px;
+}
+
+.tool-call-draft__args {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  max-height: 140px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-text-muted);
+}
+
 .approval-action-btn {
   border: 1px solid var(--color-border);
   background: #fff;

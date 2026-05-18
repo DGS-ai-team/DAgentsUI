@@ -70,6 +70,15 @@ export interface ApprovalTask extends UiMeta {
 }
 
 export type ToolExecutionStatus = "running" | "success" | "rejected" | "error";
+
+/** tool_call_delta 流式生成中的工具调用预览（未定稿，不触发执行）。 */
+export interface ToolCallDraft {
+  index: number;
+  toolCallId?: string;
+  toolName?: string;
+  argumentsPreview: string;
+  updatedAt: number;
+}
 export type ToolResultDisplayType = "terminal" | "code" | "normal_text" | "image" | "markdown";
 
 export interface ToolExecutionRecord extends UiMeta {
@@ -134,6 +143,7 @@ export interface SubTaskSummary {
 export type StreamEvent =
   | { type: "assistant"; data: { content: string } }
   | { type: "reasoning"; data: { content: string } }
+  | { type: "tool_call_delta"; data: { tool_calls?: unknown[] } }
   | { type: "tool_call"; data: { assistant_content?: string; tool_calls: ToolCallItem[] } }
   | {
       type: "tool_result";
@@ -146,7 +156,7 @@ export type StreamEvent =
     }
   | { type: "approval_required"; data: ApprovalRequiredPayload }
   | { type: "usage"; data: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } }
-  | { type: "done"; data: Record<string, unknown> }
+  | { type: "done"; data: { finish_reason?: string } & Record<string, unknown> }
   | { type: "error"; data: { message: string } }
   | { type: "subagent_started"; data: { subagent_id: string; title?: string } }
   | { type: "subagent_delta"; data: { subagent_id: string; content: string } }
@@ -164,6 +174,8 @@ export interface MainChatPanelProps {
   messages: ChatMessage[];
   approvals?: ApprovalTask[];
   toolExecutions?: ToolExecutionRecord[];
+  /** 当前轮次 tool_call_delta 流式预览（未定稿）。 */
+  toolCallDrafts?: ToolCallDraft[];
   submittingToolCallIds?: string[];
   runningToolCallIds?: string[];
   completedToolCallIds?: string[];

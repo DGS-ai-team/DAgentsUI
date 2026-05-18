@@ -29,7 +29,7 @@ export function RuntimeStatusPanel({
           </div>
         </div>
 
-        {errorText && <div className="runtime__error">{errorText}</div>}
+        {errorText ? <div className="runtime__error">{errorText}</div> : null}
       </div>
     </section>
   );
