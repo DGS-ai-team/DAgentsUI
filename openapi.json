@@ -121,6 +121,46 @@
         }
       }
     },
+    "/v1/sessions/{session_id}": {
+      "delete": {
+        "summary": "Release Session",
+        "description": "释放指定 session 的服务端资源，并删除该会话持久化记录。",
+        "operationId": "release_session_v1_sessions__session_id__delete",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionReleaseResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/messages": {
       "post": {
         "summary": "Submit Message",
@@ -159,18 +199,19 @@
         }
       }
     },
-    "/v1/streams/{request_id}": {
+    "/v1/streams": {
       "get": {
-        "summary": "Stream",
-        "operationId": "stream_v1_streams__request_id__get",
+        "summary": "Stream All",
+        "description": "订阅全局 SSE 流（跨 session/request 的实时事件）。\n\n逻辑：\n1. 连接建立后持续读取事件总线 `subscribe_all()`；\n2. 每条事件均透传为标准 SSE 包；\n3. 连接断开由客户端主动关闭或网络中断触发。\n\n关键边界：\n- 该接口仅推送连接建立后的实时事件，不回放历史；\n- 同一前端可复用一个连接并按 `session_id` 在本地分流展示。",
+        "operationId": "stream_all_v1_streams_get",
         "parameters": [
           {
-            "name": "request_id",
-            "in": "path",
+            "name": "client_id",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Request Id"
+              "title": "Client Id"
             }
           }
         ],
@@ -237,6 +278,12 @@
             "type": "string",
             "minLength": 1,
             "title": "Session Id"
+          },
+          "client_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Client Id",
+            "default": "default"
           },
           "request_type": {
             "type": "string",
@@ -331,15 +378,29 @@
         ],
         "title": "SessionCreateResult"
       },
+      "SessionReleaseResult": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "released": {
+            "type": "boolean",
+            "title": "Released"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "released"
+        ],
+        "title": "SessionReleaseResult"
+      },
       "SubmitResult": {
         "properties": {
           "accepted": {
             "type": "boolean",
             "title": "Accepted"
-          },
-          "request_id": {
-            "type": "string",
-            "title": "Request Id"
           },
           "session_id": {
             "type": "string",
@@ -359,7 +420,6 @@
         "type": "object",
         "required": [
           "accepted",
-          "request_id",
           "session_id",
           "priority"
         ],
@@ -388,13 +448,6 @@
           "type": {
             "type": "string",
             "title": "Error Type"
-          },
-          "input": {
-            "title": "Input"
-          },
-          "ctx": {
-            "type": "object",
-            "title": "Context"
           }
         },
         "type": "object",

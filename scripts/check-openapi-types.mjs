@@ -14,7 +14,7 @@ try {
     process.execPath,
     [
       path.join(repoRoot, "scripts", "generate-openapi-types.mjs"),
-      "./openapi.json",
+      sourceOpenapi,
       tempTypes,
     ],
     {
