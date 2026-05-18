@@ -37,6 +37,11 @@ export interface SessionCreateResult {
   created: boolean;
 }
 
+export interface SessionReleaseResult {
+  session_id: string;
+  released: boolean;
+}
+
 export interface SubmitResult {
   accepted: boolean;
   session_id: string;
@@ -60,6 +65,7 @@ export interface ApiOperationMap {
   "prometheus_metrics_metrics_get": { method: "GET"; path: "/metrics"; requestBody: never; response: unknown; };
   "create_session_v1_sessions_post": { method: "POST"; path: "/v1/sessions"; requestBody: SessionCreateIn; response: SessionCreateResult; };
   "cancel_current_turn_v1_sessions__session_id__cancel_post": { method: "POST"; path: "/v1/sessions/{session_id}/cancel"; requestBody: never; response: CancelTurnResult; };
+  "release_session_v1_sessions__session_id__delete": { method: "DELETE"; path: "/v1/sessions/{session_id}"; requestBody: never; response: SessionReleaseResult; };
   "submit_message_v1_messages_post": { method: "POST"; path: "/v1/messages"; requestBody: MessageIn; response: SubmitResult; };
   "stream_all_v1_streams_get": { method: "GET"; path: "/v1/streams"; requestBody: never; response: unknown; };
 }
