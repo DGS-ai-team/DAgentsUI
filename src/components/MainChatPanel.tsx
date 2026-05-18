@@ -49,7 +49,11 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         <div className="msg__body msg__body--hint-only">
           <div className="msg__hint msg__hint--stream-meta">
             <span className="msg__meta-label">thinking</span>
-            {message.reasoningPhaseActive ? <ThinkingDots /> : null}
+            {message.reasoningPhaseActive ? (
+              <ThinkingDots />
+            ) : (
+              <span className="msg__meta-done">done</span>
+            )}
           </div>
         </div>
       </div>
@@ -80,7 +84,13 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             <span className={message.role === "reasoning" || message.role === "system" ? "msg__meta-label" : undefined}>
               {hint}
             </span>
-            {message.reasoningPhaseActive ? <ThinkingDots /> : null}
+            {message.role === "reasoning" ? (
+              message.reasoningPhaseActive ? (
+                <ThinkingDots />
+              ) : (
+                <span className="msg__meta-done">done</span>
+              )
+            ) : null}
           </div>
         ) : null}
         {message.role === "assistant" ? (

@@ -772,6 +772,13 @@ input {
   text-transform: lowercase;
 }
 
+.msg__meta-done {
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
 .msg__meta-dots {
   display: inline-flex;
   align-items: center;
