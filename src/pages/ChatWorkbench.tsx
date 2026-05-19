@@ -18,6 +18,10 @@ import {
   toolCallDeltaSlotsToDrafts,
   type ToolCallDeltaSlot,
 } from "../utils/toolCallStream";
+import {
+  parseWorkbenchSseEnvelope,
+  workbenchSseEventTypes,
+} from "./chatWorkbench/sseEvents";
 import { useBoundedEventSeqMemory } from "./chatWorkbench/useBoundedEventSeqMemory";
 import { useWorkbenchApiBootstrap } from "./chatWorkbench/useWorkbenchApiBootstrap";
 import { useWorkbenchSseConnection } from "./chatWorkbench/useWorkbenchSseConnection";
@@ -1137,70 +1141,21 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
       }
     };
 
-    /**
-     * 解析原始 SSE 数据并做基础防护：
-     * - 按 client_id 过滤非当前客户端事件
-     * - 优先按 payload seq 去重，缺失时用 SSE id 兜底，避免重连后重复渲染
-     * - 解析失败时记录日志而不中断主流程
-     */
-    const parseAndDispatch = (eventType: string, rawData: string, lastEventId: string) => {
-      try {
-        const parsed = JSON.parse(rawData) as {
-          data?: unknown;
-          seq?: unknown;
-          session_id?: unknown;
-          client_id?: unknown;
-        };
-        const seqNumber = Number(parsed.seq ?? lastEventId);
-        const parsedClientId = String(parsed.client_id ?? "").trim();
-        if (parsedClientId && parsedClientId !== clientId) {
-          return;
-        } else {
-          // same client
-        }
-        if (Number.isFinite(seqNumber) && seqNumber >= 0) {
-          const eventKey = `${clientId}:${seqNumber}`;
-          if (!rememberEventSeq(eventKey)) {
-            wbLog("sse:event:deduplicated", { eventType, seq: seqNumber });
-            return;
-          }
-        } else {
-          // missing request/seq
-        }
-        if (parsed && typeof parsed === "object") {
-          onEvent(eventType, parsed as Record<string, unknown>);
-        } else {
-          return;
-        }
-      } catch (error) {
-        wbLog("sse:parse:error", {
-          eventType,
-          rawData,
-          error: String(error),
-        });
-      }
-    };
-
-    const eventTypes = [
-      "assistant",
-      "reasoning",
-      "tool_call_delta",
-      "tool_call",
-      "tool_result",
-      "approval_required",
-      "usage",
-      "error",
-      "done",
-      "subagent_started",
-      "subagent_delta",
-      "subagent_done",
-      "subagent_error",
-    ] as const;
     const removeListeners: Array<() => void> = [];
-    for (const type of eventTypes) {
+    for (const type of workbenchSseEventTypes) {
       const listener = (event: Event) => {
         const msgEvent = event as MessageEvent;
-        parseAndDispatch(type, msgEvent.data, msgEvent.lastEventId);
+        const envelope = parseWorkbenchSseEnvelope({
+          eventType: type,
+          rawData: msgEvent.data,
+          lastEventId: msgEvent.lastEventId,
+          clientId,
+          rememberEventSeq,
+          log: wbLog,
+        });
+        if (envelope) {
+          onEvent(type, envelope);
+        }
       };
       es.addEventListener(type, listener);
       removeListeners.push(() => {
