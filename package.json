@@ -16,7 +16,6 @@
     "preview": "vite preview",
     "gen:types": "node ./scripts/generate-openapi-types.mjs ./openapi.json ./src/api/types.ts",
     "check:openapi": "node ./scripts/check-openapi-types.mjs",
-    "typecheck": "tsc -b",
     "ci": "pnpm check:openapi && pnpm typecheck && pnpm build",
     "electron:pack:win": "node ./scripts/electron-builder-with-china-mirror.mjs --win nsis --publish never",
     "electron:pack:mac": "electron-builder --mac zip --publish never",
