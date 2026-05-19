@@ -10,6 +10,12 @@ type Props = {
   text: string;
 };
 
+function resolveImageDisplaySrc(text: string): string {
+  const trimmed = text.trim();
+  const markdownImage = trimmed.match(/^!\[[^\]]*\]\(\s*<?([^\s)>]+)>?(?:\s+["'][^"']*["'])?\s*\)$/);
+  return markdownImage?.[1] ?? trimmed;
+}
+
 /**
  * 按 display_type 渲染一段文本（工具结果气泡与 write_file 审批预览共用）。
  * 换行：统一 CRLF/CR → LF，再渲染（空串仍不展示）。
@@ -47,7 +53,7 @@ export function DisplayTypeContentPreview({ displayType, text }: Props): ReactNo
     );
   }
   if (displayType === "image") {
-    return <img src={normalized.trim()} alt="tool result" className="tool-exec-bubble__image" />;
+    return <img src={resolveImageDisplaySrc(normalized)} alt="tool result" className="tool-exec-bubble__image" />;
   }
   return <div className="tool-exec-bubble__summary">{normalized}</div>;
 }
