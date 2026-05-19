@@ -192,7 +192,7 @@ flowchart TD
 1. 用户在当前 **activeSessionId** 输入并发送。
 2. 本地追加 **user** 消息气泡；`sending` / `runtime.status = running`。
 3. `POST /v1/messages` 提交（`request_type: message` 等字段以类型定义为准）。
-4. 助手内容、工具结果、审批等由 **SSE** 异步回写；收到 `done` / `error` 等事件后收敛运行态与发送中状态。
+4. 助手内容、工具结果、审批等由 **SSE** 异步回写；工具结果会携带截断/脱敏/raw_ref 元数据，审批项可携带风险、原因与策略来源；收到 `done` / `error` 等事件后收敛运行态与发送中状态。
 
 **单轮对话：HTTP 提交与 SSE 回流（概念）**：
 
@@ -257,8 +257,8 @@ flowchart TB
 
 ### 4.4 工具审批（approval）
 
-1. SSE `approval_required` 在对应会话下追加 **ApprovalTask**。
-2. 用户在当前会话内对工具调用做 **批准 / 拒绝**。
+1. SSE `approval_required` 在对应会话下追加 **ApprovalTask**，保留每个 tool call 的 `approval_reason`、`risk_level`、`approval_mode` 等元数据。
+2. UI 在审批气泡内展示风险徽标、审批原因和策略来源，用户在当前会话内对工具调用做 **批准 / 拒绝**。
 3. 通过 `submitResume`（底层仍为 `submitMessage` 语义路径）通知后端继续或终止。
 4. 轮次结束或异常时，按产品策略清理**已失效**的待审批项，避免计数与可操作状态不一致。
 
@@ -278,7 +278,13 @@ flowchart TD
   A9 --> A10["按策略清理已失效审批\n避免残留待审批数"]
 ```
 
-### 4.5 子 Agent 线程（subagent）
+### 4.5 工具结果（tool_result）
+
+1. SSE `tool_result` 按 `tool_call_id` 更新或创建 **ToolExecutionRecord**。
+2. 前端合并 `tool_call` 阶段缓存的 arguments 与 `tool_result` 顶层路径字段，保证读写文件类卡片能展示路径。
+3. `display_type` 控制结果渲染方式；`truncated`、`sensitive_filtered`、`raw_ref` 作为结果元数据展示在工具卡片中，提示用户展示内容是否为完整原文。
+
+### 4.6 子 Agent 线程（subagent）
 
 - SSE：`subagent_started` / `subagent_delta` / `subagent_done` / `subagent_error` 更新侧栏线程列表与内容。
 - **仅当事件所属会话为当前正在浏览的会话**时，可自动选中最新子线程，避免干扰用户在其它会话上的操作。

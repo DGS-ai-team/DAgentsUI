@@ -1,4 +1,4 @@
-import type { ApprovalTask, ToolCallDecision, ToolCallItem } from "../ui-contracts";
+import type { ApprovalTask, ToolCallDecision, ToolCallItem, ToolRiskLevel } from "../ui-contracts";
 import { DisplayTypeContentPreview } from "./DisplayTypeContentPreview";
 import { EditFileApprovalArgsPreview } from "./EditFileApprovalArgsPreview";
 import { isEditFileToolName, parseEditFileApprovalArguments } from "../utils/editFileTool";
@@ -36,6 +36,31 @@ function decisionForToolCall(
     return null;
   }
   return null;
+}
+
+const riskLabels: Record<ToolRiskLevel, string> = {
+  low: "低风险",
+  medium: "中风险",
+  high: "高风险",
+};
+
+function getToolRiskLevel(toolCall: ToolCallItem): ToolRiskLevel | undefined {
+  return toolCall.risk_level ?? toolCall.riskLevel;
+}
+
+function getApprovalReason(toolCall: ToolCallItem): string {
+  return String(toolCall.approval_reason ?? toolCall.approvalReason ?? "").trim();
+}
+
+function getApprovalMode(toolCall: ToolCallItem): string {
+  return String(toolCall.approval_mode ?? toolCall.approvalMode ?? "").trim();
+}
+
+function ToolRiskPill({ riskLevel }: { riskLevel?: ToolRiskLevel }) {
+  if (!riskLevel) {
+    return null;
+  }
+  return <span className={`badge badge--${riskLevel}`}>{riskLabels[riskLevel]}</span>;
 }
 
 function ToolStatusPill({
@@ -89,6 +114,9 @@ function ToolCallRow({
   const editFileModel = isEditFileToolName(toolCall.name)
     ? parseEditFileApprovalArguments(toolCall.arguments)
     : null;
+  const riskLevel = getToolRiskLevel(toolCall);
+  const approvalReason = getApprovalReason(toolCall);
+  const approvalMode = getApprovalMode(toolCall);
 
   return (
     <li className="approval-tool-item">
@@ -113,6 +141,7 @@ function ToolCallRow({
           </div>
         )}
         <div className="approval-tool-item__right">
+          <ToolRiskPill riskLevel={riskLevel} />
           <ToolStatusPill decision={decision} running={running} completed={completed} />
           {!handled && onDecide ? (
             <div className="approval-tool-item__inline-actions">
@@ -136,6 +165,13 @@ function ToolCallRow({
           ) : null}
         </div>
       </header>
+
+      {approvalReason || approvalMode ? (
+        <div className="approval-tool-item__policy">
+          {approvalReason ? <div className="approval-tool-item__reason">{approvalReason}</div> : null}
+          {approvalMode ? <div className="approval-tool-item__mode">策略来源：{approvalMode}</div> : null}
+        </div>
+      ) : null}
 
       {writeFileArgs ? (
         <div className="write-file-tool__preview">

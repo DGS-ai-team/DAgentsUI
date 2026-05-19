@@ -42,6 +42,7 @@ const initialApiBaseUrl = isElectronShell
   : resolvedApiBaseUrl || DEFAULT_REAL_BACKEND;
 
 const DEFAULT_SESSION_ID = "main";
+const MAX_SEEN_EVENT_SEQ_KEYS = 5000;
 
 /**
  * 统一的页面级日志函数。
@@ -589,6 +590,21 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     setSseConnected(false);
   }, []);
 
+  const rememberSeenEventSeq = useCallback((eventKey: string) => {
+    const seen = seenEventSeqRef.current;
+    if (seen.has(eventKey)) {
+      return false;
+    }
+    if (seen.size >= MAX_SEEN_EVENT_SEQ_KEYS) {
+      const oldest = seen.values().next().value;
+      if (typeof oldest === "string") {
+        seen.delete(oldest);
+      }
+    }
+    seen.add(eventKey);
+    return true;
+  }, []);
+
   const resetWorkbenchSessionState = useCallback(() => {
     wbLog("workbench:reset-for-backend-switch");
     setSessionIds([]);
@@ -875,6 +891,9 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
         const toolCallId = typeof payload.tool_call_id === "string" ? payload.tool_call_id : "";
         const rejected = Boolean(payload.rejected);
         const displayType = normalizeToolDisplayType(payload.display_type);
+        const rawRef = typeof payload.raw_ref === "string" ? payload.raw_ref : "";
+        const truncated = Boolean(payload.truncated);
+        const sensitiveFiltered = Boolean(payload.sensitive_filtered);
         if (!toolCallId) {
           return;
         } else {
@@ -922,6 +941,9 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
                 ),
                 resultContent: content,
                 displayType,
+                rawRef,
+                truncated,
+                sensitiveFiltered,
                 detail: JSON.stringify(payload, null, 2),
                 finishedAt: Date.now(),
               };
@@ -943,6 +965,9 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
                 ),
                 resultContent: content,
                 displayType,
+                rawRef,
+                truncated,
+                sensitiveFiltered,
                 detail: JSON.stringify(payload, null, 2),
                 finishedAt: Date.now(),
                 arguments: mergedArguments,
@@ -1183,10 +1208,10 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     /**
      * 解析原始 SSE 数据并做基础防护：
      * - 按 client_id 过滤非当前客户端事件
-     * - 按 seq 去重，避免重连后重复渲染
+     * - 优先按 payload seq 去重，缺失时用 SSE id 兜底，避免重连后重复渲染
      * - 解析失败时记录日志而不中断主流程
      */
-    const parseAndDispatch = (eventType: string, rawData: string) => {
+    const parseAndDispatch = (eventType: string, rawData: string, lastEventId: string) => {
       try {
         const parsed = JSON.parse(rawData) as {
           data?: unknown;
@@ -1194,7 +1219,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
           session_id?: unknown;
           client_id?: unknown;
         };
-        const seqNumber = Number(parsed.seq);
+        const seqNumber = Number(parsed.seq ?? lastEventId);
         const parsedClientId = String(parsed.client_id ?? "").trim();
         if (parsedClientId && parsedClientId !== clientId) {
           return;
@@ -1203,11 +1228,9 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
         }
         if (Number.isFinite(seqNumber) && seqNumber >= 0) {
           const eventKey = `${clientId}:${seqNumber}`;
-          if (seenEventSeqRef.current.has(eventKey)) {
+          if (!rememberSeenEventSeq(eventKey)) {
             wbLog("sse:event:deduplicated", { eventType, seq: seqNumber });
             return;
-          } else {
-            seenEventSeqRef.current.add(eventKey);
           }
         } else {
           // missing request/seq
@@ -1245,7 +1268,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     for (const type of eventTypes) {
       const listener = (event: Event) => {
         const msgEvent = event as MessageEvent;
-        parseAndDispatch(type, msgEvent.data);
+        parseAndDispatch(type, msgEvent.data, msgEvent.lastEventId);
       };
       es.addEventListener(type, listener);
       removeListeners.push(() => {
@@ -1260,17 +1283,6 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     es.onerror = () => {
       wbLog("sse:global:error");
       setSseConnected(false);
-      setRuntimeBySession((prev) => {
-        const next: Record<string, RuntimeState> = { ...prev };
-        for (const sid of Object.keys(next)) {
-          if (next[sid].status === "running") {
-            next[sid] = { ...next[sid], status: "error", errorMessage: "SSE 连接异常" };
-          } else {
-            // keep current status
-          }
-        }
-        return next;
-      });
     };
 
     return () => {
@@ -1284,6 +1296,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     clientId,
     defaultRuntimeModel,
     sseGeneration,
+    rememberSeenEventSeq,
     clearToolCallDraftsForRequest,
     markSessionAgentWorking,
     registerRunningToolCallsForSession,

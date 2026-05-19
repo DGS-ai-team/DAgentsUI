@@ -96,6 +96,7 @@ export function ToolExecutionBubble({ item }: { item: ToolExecutionRecord }) {
     writeCtx || readCtx ? " tool-exec-bubble__head--tool-path" : "";
 
   const showDetails = !readCtx;
+  const hasResultMetadata = Boolean(item.truncated || item.sensitiveFiltered || item.rawRef);
 
   return (
     <div className="msg msg--tool-centered">
@@ -110,6 +111,14 @@ export function ToolExecutionBubble({ item }: { item: ToolExecutionRecord }) {
           </div>
 
           {isDefaultToolLayout ? null : summaryNode}
+
+          {hasResultMetadata ? (
+            <div className="tool-exec-bubble__result-meta">
+              {item.truncated ? <span className="badge badge--medium">输出已截断</span> : null}
+              {item.sensitiveFiltered ? <span className="badge badge--high">已脱敏</span> : null}
+              {item.rawRef ? <span className="tool-exec-bubble__raw-ref">raw_ref: {item.rawRef}</span> : null}
+            </div>
+          ) : null}
 
           {showDetails ? (
             <details className="tool-exec-bubble__details">

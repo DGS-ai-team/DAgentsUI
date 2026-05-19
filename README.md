@@ -81,6 +81,8 @@ pnpm dev:electron
 ### D）构建与预览
 
 ```bash
+pnpm typecheck
+pnpm check
 pnpm build
 pnpm preview
 ```
@@ -92,6 +94,8 @@ pnpm preview
 | 安装依赖 | `pnpm install` |
 | 开发（Web） | `pnpm dev` / `pnpm dev:web` |
 | 开发（Electron） | `pnpm dev:electron` |
+| TypeScript 类型检查 | `pnpm typecheck` |
+| 本地完整校验（类型检查 + 构建） | `pnpm check` |
 | 生产构建 | `pnpm build` |
 | 预览构建产物 | `pnpm preview` |
 | 从 `openapi.json` 生成 TS 类型 | `pnpm gen:types` |

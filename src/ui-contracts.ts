@@ -43,12 +43,20 @@ export interface ChatMessage extends UiMeta {
   reasoningPhaseActive?: boolean;
 }
 
+export type ToolRiskLevel = "low" | "medium" | "high";
+
 export interface ToolCallItem {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
   rawArguments?: string;
-  riskLevel?: "low" | "medium" | "high";
+  raw_arguments?: string;
+  riskLevel?: ToolRiskLevel;
+  risk_level?: ToolRiskLevel;
+  approvalReason?: string;
+  approval_reason?: string;
+  approvalMode?: string;
+  approval_mode?: string;
 }
 
 export interface ApprovalRequiredPayload {
@@ -91,6 +99,9 @@ export interface ToolExecutionRecord extends UiMeta {
   resultContent?: string;
   detail?: string;
   displayType?: ToolResultDisplayType;
+  rawRef?: string;
+  truncated?: boolean;
+  sensitiveFiltered?: boolean;
   finishedAt?: number;
 }
 
@@ -152,6 +163,9 @@ export type StreamEvent =
         tool_call_id?: string;
         content?: string;
         display_type?: ToolResultDisplayType;
+        raw_ref?: string;
+        truncated?: boolean;
+        sensitive_filtered?: boolean;
       };
     }
   | { type: "approval_required"; data: ApprovalRequiredPayload }
