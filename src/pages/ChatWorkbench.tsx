@@ -7,6 +7,7 @@ import { SubAgentThreadView } from "../components/SubAgentThreadView";
 import { useSettings } from "../settings/SettingsContext";
 import { omitSessionKey } from "../utils/omitSessionKey";
 import { normalizeToolDisplayType } from "../utils/displayType";
+import { buildToolExecutionSummary, createMessage } from "./chatWorkbench/messageHelpers";
 import {
   applyToolCallDeltaChunks,
   extractAssistantContentFromToolPayload,
@@ -22,6 +23,11 @@ import {
   parseWorkbenchSseEnvelope,
   workbenchSseEventTypes,
 } from "./chatWorkbench/sseEvents";
+import {
+  extractToolCallsFromPayload,
+  normalizeToolCallItemArguments,
+  pickToolArgumentsFromToolResultPayload,
+} from "./chatWorkbench/toolPayload";
 import { useBoundedEventSeqMemory } from "./chatWorkbench/useBoundedEventSeqMemory";
 import { useWorkbenchApiBootstrap } from "./chatWorkbench/useWorkbenchApiBootstrap";
 import { useWorkbenchSseConnection } from "./chatWorkbench/useWorkbenchSseConnection";
@@ -53,114 +59,6 @@ function wbLog(message: string, payload?: unknown): void {
   }
 }
 
-/**
- * 生成一条标准聊天消息对象。
- * - id 使用 role + 时间戳 + 随机串，降低前端去重冲突概率
- * - requestId 用于把同一轮请求中的增量消息、工具结果关联到一起
- */
-function createMessage(
-  sessionId: string,
-  role: ChatMessage["role"],
-  content: string,
-  requestId?: string,
-): ChatMessage {
-  return {
-    id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    sessionId,
-    requestId,
-    createdAt: Date.now(),
-    role,
-    content,
-  };
-}
-
-/**
- * 生成工具执行摘要文本，用于工具气泡的首行展示。
- * - running/rejected/error 走固定文案
- * - success 时会对返回文本做压缩和截断，避免 UI 被长内容撑开
- */
-function buildToolExecutionSummary(
-  toolName: string,
-  status: "running" | "success" | "rejected" | "error",
-  rawText?: string,
-): string {
-  const name = (toolName || "工具").trim();
-  if (status === "running") {
-    return `${name} 正在执行`;
-  }
-  if (status === "rejected") {
-    return `${name} 已拒绝`;
-  }
-  if (status === "error") {
-    return `${name} 执行失败`;
-  }
-  const text = String(rawText ?? "").trim();
-  if (!text) {
-    return `${name} 已完成`;
-  }
-  const compact = text.replace(/\s+/g, " ");
-  const clipped = compact.length > 56 ? `${compact.slice(0, 56)}...` : compact;
-  return `${name}：${clipped}`;
-}
-
-/** 从 tool_result 的 data 提取写入 ToolExecutionRecord.arguments 的字段（含 path 等顶层键）。 */
-function pickToolArgumentsFromToolResultPayload(p: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  const nested =
-    p.arguments && typeof p.arguments === "object" && !Array.isArray(p.arguments)
-      ? (p.arguments as Record<string, unknown>)
-      : p.args && typeof p.args === "object" && !Array.isArray(p.args)
-        ? (p.args as Record<string, unknown>)
-        : null;
-  if (nested) {
-    Object.assign(out, nested);
-  }
-  for (const key of ["path", "file_path", "target_path", "filepath", "filename", "file"]) {
-    const v = p[key];
-    if (typeof v === "string" && v.trim()) {
-      const cur = out[key];
-      if (typeof cur !== "string" || !cur.trim()) {
-        out[key] = v.trim();
-      }
-    }
-  }
-  return out;
-}
-
-/** 将 tool_call 条目里的 arguments 规范为对象（兼容后端 JSON 字符串）。 */
-function normalizeToolCallItemArguments(raw: unknown): Record<string, unknown> {
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    return raw as Record<string, unknown>;
-  }
-  if (typeof raw === "string") {
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
-      }
-    } catch {
-      // ignore invalid JSON
-    }
-  }
-  return {};
-}
-
-/** 从 SSE data 中提取 tool_calls 数组（与 approval_required 类似的嵌套结构）。 */
-function extractToolCallsFromPayload(payload: Record<string, unknown>): ToolCallItem[] {
-  const root = payload.tool_calls;
-  if (Array.isArray(root) && root.length > 0) {
-    return root as ToolCallItem[];
-  }
-  const fromApproval = (payload.approval_args ?? {}) as { tool_calls?: unknown };
-  if (Array.isArray(fromApproval.tool_calls) && fromApproval.tool_calls.length > 0) {
-    return fromApproval.tool_calls as ToolCallItem[];
-  }
-  const fromArgs = (payload.args ?? {}) as { tool_calls?: unknown };
-  if (Array.isArray(fromArgs.tool_calls) && fromArgs.tool_calls.length > 0) {
-    return fromArgs.tool_calls as ToolCallItem[];
-  }
-  return [];
-}
 
 /** 会话列表“新建”按钮图标。 */
 function IconPlus() {
