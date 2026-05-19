@@ -10,6 +10,7 @@
 - `pages/ChatWorkbench.tsx`：工作台页面（主对话 + 运行状态 + 子线程）。
 - `pages/chatWorkbench/resolveApiBaseUrl.ts`：启动期解析 API 基址、clientId 与 Electron 内嵌代理。
 - `pages/chatWorkbench/useWorkbenchApiBootstrap.ts`：封装工作台 API client、apiBaseUrl 与 clientId 启动状态。
+- `pages/chatWorkbench/useToolCallDraftBuffers.ts`：封装 tool_call_delta 草稿 buffer、同步与清理逻辑。
 - `pages/chatWorkbench/messageHelpers.ts`：封装聊天消息创建与工具执行摘要文本生成。
 - `pages/chatWorkbench/sessionHelpers.ts`：封装默认会话 ID、会话历史排序与会话标题生成。
 - `pages/chatWorkbench/sseEvents.ts`：封装工作台 SSE 事件类型与原始 envelope 解析/过滤/去重。

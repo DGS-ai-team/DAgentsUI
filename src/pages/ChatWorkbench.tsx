@@ -21,8 +21,6 @@ import {
   isSegmentEndFinishReason,
   isTerminalTurnFinishReason,
   parseFinishReason,
-  toolCallDeltaSlotsToDrafts,
-  type ToolCallDeltaSlot,
 } from "../utils/toolCallStream";
 import {
   parseWorkbenchSseEnvelope,
@@ -34,6 +32,7 @@ import {
   pickToolArgumentsFromToolResultPayload,
 } from "./chatWorkbench/toolPayload";
 import { useBoundedEventSeqMemory } from "./chatWorkbench/useBoundedEventSeqMemory";
+import { useToolCallDraftBuffers } from "./chatWorkbench/useToolCallDraftBuffers";
 import { useWorkbenchApiBootstrap } from "./chatWorkbench/useWorkbenchApiBootstrap";
 import { useWorkbenchSseConnection } from "./chatWorkbench/useWorkbenchSseConnection";
 import type {
@@ -187,8 +186,13 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
   const responseStartedByRequestRef = useRef<Set<string>>(new Set());
   /** SSE tool_call 阶段按 tool_call_id 缓存的调用参数，供 tool_result 合并展示（如 read_file 路径）。 */
   const pendingToolCallArgsBySessionRef = useRef<Record<string, Record<string, Record<string, unknown>>>>({});
-  /** tool_call_delta 按 request 维度的 index 缓冲（未定稿，不触发执行）。 */
-  const toolCallDeltaBufferRef = useRef<Record<string, Map<number, ToolCallDeltaSlot>>>({});
+  const {
+    getOrCreateToolCallBuffer,
+    syncToolCallDraftsForRequest,
+    clearToolCallDraftsForRequest,
+    clearToolCallDraftsForSession,
+    resetToolCallDraftBuffers,
+  } = useToolCallDraftBuffers(setToolCallDraftsBySession);
   const { settings, loaded: settingsLoaded } = useSettings();
   const showReasoningDetailRef = useRef(settings.showReasoningDetail);
   useEffect(() => {
@@ -287,19 +291,6 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     });
   };
 
-  const toolCallDraftBufferKey = (sid: string, requestId: string) => `${sid}::${requestId}`;
-
-  const syncToolCallDraftsForRequest = useCallback((sid: string, requestId: string) => {
-    const buffer = toolCallDeltaBufferRef.current[toolCallDraftBufferKey(sid, requestId)];
-    const drafts = buffer ? toolCallDeltaSlotsToDrafts(buffer) : [];
-    setToolCallDraftsBySession((prev) => ({ ...prev, [sid]: drafts }));
-  }, []);
-
-  const clearToolCallDraftsForRequest = useCallback((sid: string, requestId: string) => {
-    delete toolCallDeltaBufferRef.current[toolCallDraftBufferKey(sid, requestId)];
-    setToolCallDraftsBySession((prev) => ({ ...prev, [sid]: [] }));
-  }, []);
-
   const registerRunningToolCallsForSession = useCallback(
     (sid: string, requestId: string, toolCalls: ToolCallItem[]) => {
       const prevBucket = pendingToolCallArgsBySessionRef.current[sid] ?? {};
@@ -385,11 +376,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     setApprovalsBySession((prev) => omitSessionKey(prev, sid));
     setToolExecutionsBySession((prev) => omitSessionKey(prev, sid));
     setToolCallDraftsBySession((prev) => omitSessionKey(prev, sid));
-    for (const key of Object.keys(toolCallDeltaBufferRef.current)) {
-      if (key.startsWith(`${sid}::`)) {
-        delete toolCallDeltaBufferRef.current[key];
-      }
-    }
+    clearToolCallDraftsForSession(sid);
     setThreadsBySession((prev) => omitSessionKey(prev, sid));
     setActiveThreadBySession((prev) => omitSessionKey(prev, sid));
     setSubmittingToolCallIdsBySession((prev) => omitSessionKey(prev, sid));
@@ -436,7 +423,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     setApprovalsBySession({});
     setToolExecutionsBySession({});
     setToolCallDraftsBySession({});
-    toolCallDeltaBufferRef.current = {};
+    resetToolCallDraftBuffers();
     setThreadsBySession({});
     setActiveThreadBySession({});
     setSubmittingToolCallIdsBySession({});
@@ -452,7 +439,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     streamTurnBySessionRef.current = {};
     responseStartedByRequestRef.current.clear();
     pendingToolCallArgsBySessionRef.current = {};
-  }, [clearEventSeqMemory]);
+  }, [clearEventSeqMemory, resetToolCallDraftBuffers]);
 
   const bootstrapMainSessionAndSse = useCallback(
     async (reason: string) => {
@@ -992,12 +979,8 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
         finalizeCollapsedReasoningPhase(sid, requestId);
         const deltaChunks = payload.tool_calls;
         if (Array.isArray(deltaChunks) && deltaChunks.length > 0) {
-          const bufferKey = toolCallDraftBufferKey(sid, requestId);
-          if (!toolCallDeltaBufferRef.current[bufferKey]) {
-            toolCallDeltaBufferRef.current[bufferKey] = new Map();
-          }
           const changed = applyToolCallDeltaChunks(
-            toolCallDeltaBufferRef.current[bufferKey],
+            getOrCreateToolCallBuffer(sid, requestId),
             deltaChunks,
           );
           if (changed) {
@@ -1009,11 +992,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
         finalizeCollapsedReasoningPhase(sid, requestId);
         const toolCalls = extractToolCallsFromPayload(payload);
         if (toolCalls.length > 0) {
-          const bufferKey = toolCallDraftBufferKey(sid, requestId);
-          if (!toolCallDeltaBufferRef.current[bufferKey]) {
-            toolCallDeltaBufferRef.current[bufferKey] = new Map();
-          }
-          finalizeToolCallBufferFromItems(toolCallDeltaBufferRef.current[bufferKey], toolCalls);
+          finalizeToolCallBufferFromItems(getOrCreateToolCallBuffer(sid, requestId), toolCalls);
           clearToolCallDraftsForRequest(sid, requestId);
           registerRunningToolCallsForSession(sid, requestId, toolCalls);
         }
@@ -1072,6 +1051,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     sseGeneration,
     rememberEventSeq,
     clearToolCallDraftsForRequest,
+    getOrCreateToolCallBuffer,
     markSessionAgentWorking,
     registerRunningToolCallsForSession,
     syncToolCallDraftsForRequest,
