@@ -9,6 +9,11 @@ import { omitSessionKey } from "../utils/omitSessionKey";
 import { normalizeToolDisplayType } from "../utils/displayType";
 import { buildToolExecutionSummary, createMessage } from "./chatWorkbench/messageHelpers";
 import {
+  buildSessionHistory,
+  DEFAULT_SESSION_ID,
+  getSessionDisplayTitle,
+} from "./chatWorkbench/sessionHelpers";
+import {
   applyToolCallDeltaChunks,
   extractAssistantContentFromToolPayload,
   finalizeToolCallBufferFromItems,
@@ -42,7 +47,6 @@ import type {
   ToolCallItem,
 } from "../ui-contracts";
 
-const DEFAULT_SESSION_ID = "main";
 const MAX_SEEN_EVENT_SEQ_KEYS = 5000;
 
 /**
@@ -214,29 +218,14 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
   const activeCompletedToolCallIds = completedToolCallIdsBySession[activeSessionId] ?? [];
   // 当前会话是否处于“发送请求中”。
   const activeSending = sendingBySession[activeSessionId] ?? false;
-  // 会话历史展示顺序：默认会话固定在最前，其余按创建逆序展示。
-  const sessionHistory = useMemo(() => {
-    const hasDefaultSession = sessionIds.includes(DEFAULT_SESSION_ID);
-    const others = sessionIds.filter((sid) => sid !== DEFAULT_SESSION_ID).reverse();
-    return hasDefaultSession ? [DEFAULT_SESSION_ID, ...others] : others;
-  }, [sessionIds]);
+  const sessionHistory = useMemo(() => buildSessionHistory(sessionIds), [sessionIds]);
 
-  /**
-   * 获取会话展示标题。
-   * 优先级：用户自定义标题 > 默认会话名 > 自动序号标题。
-   */
-  const getSessionTitle = (sid: string): string => {
-    const custom = (sessionTitleById[sid] ?? "").trim();
-    if (custom) {
-      return custom;
-    }
-    if (sid === DEFAULT_SESSION_ID) {
-      return "默认对话";
-    }
-    const order = sessionIds.findIndex((item) => item === sid);
-    const displayOrder = order >= 0 ? order + 1 : 0;
-    return displayOrder > 0 ? `对话 ${displayOrder}` : "对话";
-  };
+  const getSessionTitle = (sid: string): string =>
+    getSessionDisplayTitle({
+      sessionId: sid,
+      sessionIds,
+      sessionTitleById,
+    });
 
   /**
    * 确保某个 session 在各类状态表中已初始化。
