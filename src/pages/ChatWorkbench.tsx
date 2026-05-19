@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { DAgentsApiClient } from "../api/client";
 import { MainChatPanel } from "../components/MainChatPanel";
 import { RuntimeStatusPanel } from "../components/RuntimeStatusPanel";
 import { SubAgentThreadTabs } from "../components/SubAgentThreadTabs";
@@ -19,10 +18,7 @@ import {
   toolCallDeltaSlotsToDrafts,
   type ToolCallDeltaSlot,
 } from "../utils/toolCallStream";
-import {
-  DEFAULT_REAL_BACKEND,
-  resolveWorkbenchApiBase,
-} from "./chatWorkbench/resolveApiBaseUrl";
+import { useWorkbenchApiBootstrap } from "./chatWorkbench/useWorkbenchApiBootstrap";
 import type {
   ApprovalTask,
   ChatMessage,
@@ -33,13 +29,6 @@ import type {
   ToolCallDecision,
   ToolCallItem,
 } from "../ui-contracts";
-
-const resolvedApiBaseUrl = String(import.meta.env.VITE_API_BASE_URL ?? "").trim();
-const isElectronShell =
-  typeof window !== "undefined" && Boolean(window.electronRuntime);
-const initialApiBaseUrl = isElectronShell
-  ? DEFAULT_REAL_BACKEND
-  : resolvedApiBaseUrl || DEFAULT_REAL_BACKEND;
 
 const DEFAULT_SESSION_ID = "main";
 const MAX_SEEN_EVENT_SEQ_KEYS = 5000;
@@ -216,22 +205,8 @@ function IconSettings() {
  * 3) 编排消息发送、工具审批、会话管理等交互
  */
 export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void }) {
-  // 当前生效的后端 API 地址（启动后会用运行时配置覆盖）。
-  const [apiBaseUrl, setApiBaseUrl] = useState<string>(initialApiBaseUrl);
-  // API 地址是否已经完成启动期解析。
-  const [apiReady, setApiReady] = useState(false);
-  // 当前客户端唯一标识（用于 SSE 过滤与请求归属）。
-  const [clientId, setClientId] = useState<string>("");
-  // clientId 是否已就绪，未就绪时不发起依赖 clientId 的请求。
-  const [clientReady, setClientReady] = useState(false);
-  // API 客户端实例；仅在 apiBaseUrl 变化时重建。
-  const api = useMemo(
-    () =>
-      new DAgentsApiClient({
-        baseUrl: apiBaseUrl,
-      }),
-    [apiBaseUrl],
-  );
+  const { api, apiBaseUrl, apiReady, clientId, clientReady, configuredApiBaseUrl } =
+    useWorkbenchApiBootstrap(wbLog);
   // 会话 ID 列表（包含默认会话与用户新建会话）。
   const [sessionIds, setSessionIds] = useState<string[]>([]);
   // 当前激活（右侧主面板展示）的会话 ID。
@@ -389,26 +364,6 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
       setActiveSessionId(sid);
     }
   };
-
-  // ----- 启动：解析 API 基址、clientId，并在 Electron 下挂接内嵌代理 -----
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const result = await resolveWorkbenchApiBase({
-        resolvedViteUrl: resolvedApiBaseUrl,
-        log: wbLog,
-      });
-      if (!cancelled) {
-        setApiBaseUrl(result.apiBaseUrl);
-        setClientId(result.clientId);
-        setClientReady(true);
-        setApiReady(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   /**
    * 向指定会话末尾追加一条消息。
@@ -703,7 +658,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
       return;
     }
     wbLog("bootstrap:start", {
-      configuredApiBaseUrl: resolvedApiBaseUrl,
+      configuredApiBaseUrl,
       effectiveApiBaseUrl: apiBaseUrl,
     });
     let cancelled = false;

@@ -9,6 +9,7 @@
 - `styles.css`：全局设计令牌与样式系统。
 - `pages/ChatWorkbench.tsx`：工作台页面（主对话 + 运行状态 + 子线程）。
 - `pages/chatWorkbench/resolveApiBaseUrl.ts`：启动期解析 API 基址、clientId 与 Electron 内嵌代理。
+- `pages/chatWorkbench/useWorkbenchApiBootstrap.ts`：封装工作台 API client、apiBaseUrl 与 clientId 启动状态。
 - `pages/SettingsPage.tsx`：用户设置（含 Electron 持久化字段）。
 - `components/MainChatPanel.tsx`：主聊天流与输入区。
 - `components/ApprovalToolBubble.tsx`：工具调用审批/执行状态气泡（内联于聊天流，展示风险等级、审批原因与策略来源）。
