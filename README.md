@@ -100,6 +100,25 @@ pnpm preview
 | 预览构建产物 | `pnpm preview` |
 | 从 `openapi.json` 生成 TS 类型 | `pnpm gen:types` |
 
+## 质量检查
+
+本仓库把后端 OpenAPI 契约文件 `openapi.json` 作为前端 API 类型源头。修改或同步后端接口后，运行：
+
+```bash
+pnpm gen:types
+pnpm check:openapi
+pnpm typecheck
+pnpm build
+```
+
+也可以使用一条命令运行 CI 同款检查：
+
+```bash
+pnpm run ci
+```
+
+`pnpm check:openapi` 会验证 `src/api/types.ts` 是否与 `openapi.json` 一致。如果失败，运行 `pnpm gen:types` 并提交生成后的 `src/api/types.ts`。
+
 ## 与后端（DAgents）对接
 
 后端仓库：**[github.com/DGS-ai-team/DAgents](https://github.com/DGS-ai-team/DAgents)**。
