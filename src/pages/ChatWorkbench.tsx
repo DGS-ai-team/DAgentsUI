@@ -18,7 +18,9 @@ import {
   toolCallDeltaSlotsToDrafts,
   type ToolCallDeltaSlot,
 } from "../utils/toolCallStream";
+import { useBoundedEventSeqMemory } from "./chatWorkbench/useBoundedEventSeqMemory";
 import { useWorkbenchApiBootstrap } from "./chatWorkbench/useWorkbenchApiBootstrap";
+import { useWorkbenchSseConnection } from "./chatWorkbench/useWorkbenchSseConnection";
 import type {
   ApprovalTask,
   ChatMessage,
@@ -262,16 +264,17 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
   const [editingSessionId, setEditingSessionId] = useState<string>("");
   // 标题编辑输入框草稿。
   const [editingTitleDraft, setEditingTitleDraft] = useState<string>("");
-  // 全局 SSE 连接状态（用于状态面板显示）。
-  const [sseConnected, setSseConnected] = useState(false);
-  /** 每次重建 EventSource 时递增，驱动事件监听 effect 重新绑定。 */
-  const [sseGeneration, setSseGeneration] = useState(0);
-  // 全局 EventSource 实例引用（避免重复创建）。
-  const globalStreamRef = useRef<EventSource | null>(null);
+  const {
+    globalStreamRef,
+    sseConnected,
+    sseGeneration,
+    setSseConnected,
+    closeGlobalSse,
+    openGlobalSse,
+  } = useWorkbenchSseConnection(wbLog);
+  const { rememberEventSeq, clearEventSeqMemory } = useBoundedEventSeqMemory(MAX_SEEN_EVENT_SEQ_KEYS);
   /** 已记录的后端地址（用于检测设置页保存后是否需要重连 SSE）。 */
   const trackedBackendBaseUrlRef = useRef<string | undefined>(undefined);
-  // 已处理事件序号集合（用于 SSE 去重）。
-  const seenEventSeqRef = useRef<Set<string>>(new Set());
   // 每个会话当前流式轮次计数（用于拼接增量内容时区分轮次）。
   const streamTurnBySessionRef = useRef<Record<string, number>>({});
   // 标记某个请求是否已经收到过服务端响应块，避免快速响应后补出过期 generating 占位。
@@ -534,32 +537,6 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     setEditingTitleDraft("");
   };
 
-  const closeGlobalSse = useCallback(() => {
-    const es = globalStreamRef.current;
-    if (!es) {
-      return;
-    }
-    wbLog("sse:global:close");
-    es.close();
-    globalStreamRef.current = null;
-    setSseConnected(false);
-  }, []);
-
-  const rememberSeenEventSeq = useCallback((eventKey: string) => {
-    const seen = seenEventSeqRef.current;
-    if (seen.has(eventKey)) {
-      return false;
-    }
-    if (seen.size >= MAX_SEEN_EVENT_SEQ_KEYS) {
-      const oldest = seen.values().next().value;
-      if (typeof oldest === "string") {
-        seen.delete(oldest);
-      }
-    }
-    seen.add(eventKey);
-    return true;
-  }, []);
-
   const resetWorkbenchSessionState = useCallback(() => {
     wbLog("workbench:reset-for-backend-switch");
     setSessionIds([]);
@@ -580,11 +557,11 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     setSessionTitleById({});
     setEditingSessionId("");
     setEditingTitleDraft("");
-    seenEventSeqRef.current.clear();
+    clearEventSeqMemory();
     streamTurnBySessionRef.current = {};
     responseStartedByRequestRef.current.clear();
     pendingToolCallArgsBySessionRef.current = {};
-  }, []);
+  }, [clearEventSeqMemory]);
 
   const bootstrapMainSessionAndSse = useCallback(
     async (reason: string) => {
@@ -598,7 +575,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
       if (reason === "backend-url-changed") {
         resetWorkbenchSessionState();
       } else {
-        seenEventSeqRef.current.clear();
+        clearEventSeqMemory();
         streamTurnBySessionRef.current[DEFAULT_SESSION_ID] = 0;
         setActiveSessionId(DEFAULT_SESSION_ID);
         setLatestErrorBySession((prev) => ({ ...prev, [DEFAULT_SESSION_ID]: undefined }));
@@ -636,9 +613,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
 
       const streamUrl = api.streamAllUrl(clientId);
       wbLog("sse:global:open", { streamUrl, clientId, reason });
-      const es = new EventSource(streamUrl);
-      globalStreamRef.current = es;
-      setSseGeneration((value) => value + 1);
+      openGlobalSse(streamUrl);
     },
     [
       api,
@@ -646,8 +621,10 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
       apiReady,
       clientId,
       clientReady,
+      clearEventSeqMemory,
       closeGlobalSse,
       defaultRuntimeModel,
+      openGlobalSse,
       resetWorkbenchSessionState,
     ],
   );
@@ -1183,7 +1160,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
         }
         if (Number.isFinite(seqNumber) && seqNumber >= 0) {
           const eventKey = `${clientId}:${seqNumber}`;
-          if (!rememberSeenEventSeq(eventKey)) {
+          if (!rememberEventSeq(eventKey)) {
             wbLog("sse:event:deduplicated", { eventType, seq: seqNumber });
             return;
           }
@@ -1251,7 +1228,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     clientId,
     defaultRuntimeModel,
     sseGeneration,
-    rememberSeenEventSeq,
+    rememberEventSeq,
     clearToolCallDraftsForRequest,
     markSessionAgentWorking,
     registerRunningToolCallsForSession,
