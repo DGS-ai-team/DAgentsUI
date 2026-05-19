@@ -12,7 +12,7 @@
 - `pages/SettingsPage.tsx`：用户设置（含 Electron 持久化字段）。
 - `components/MainChatPanel.tsx`：主聊天流与输入区。
 - `components/ApprovalToolBubble.tsx`：工具调用审批/执行状态气泡（内联于聊天流，展示风险等级、审批原因与策略来源）。
-- `components/RuntimeStatusPanel.tsx`：运行状态与 tokens。
+- `components/RuntimeStatusPanel.tsx`：运行状态、tokens、SSE 连接与当前 API 基址诊断。
 - `components/ToolExecutionBubble.tsx`：工具执行结果卡片（展示状态、预览、详情、截断/脱敏/raw_ref 元数据）。
 - `components/SubAgentThreadTabs.tsx`：子 Agent 线程切换。
 - `components/SubAgentThreadView.tsx`：子线程实时输出展示。

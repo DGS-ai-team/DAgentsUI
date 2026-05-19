@@ -28,7 +28,7 @@ function buildUrl(baseUrl: string, path: string): string {
   }
 }
 
-async function parseJsonOrThrow<T>(response: Response): Promise<T> {
+async function parseJsonOrThrow<T>(response: Response, requestLabel: string): Promise<T> {
   if (response.ok) {
     return (await response.json()) as T;
   } else {
@@ -43,7 +43,7 @@ async function parseJsonOrThrow<T>(response: Response): Promise<T> {
     } catch {
       // ignore non-json error body and use default detail
     }
-    throw new Error(`API 请求失败: ${detail}`);
+    throw new Error(`API 请求失败 (${requestLabel}, HTTP ${response.status}): ${detail}`);
   }
 }
 
@@ -88,7 +88,7 @@ export class DAgentsApiClient {
         ok: response.ok,
         elapsedMs,
       });
-      return parseJsonOrThrow<T>(response);
+      return parseJsonOrThrow<T>(response, `POST ${url}`);
     } catch (error) {
       const elapsedMs = Date.now() - startedAt;
       debugLog("http", "request:error", {
@@ -141,7 +141,7 @@ export class DAgentsApiClient {
         status: response.status,
         ok: response.ok,
       });
-      return parseJsonOrThrow<CancelTurnResult>(response);
+      return parseJsonOrThrow<CancelTurnResult>(response, `POST ${buildUrl(this.baseUrl, `/v1/sessions/${encodeURIComponent(sid)}/cancel`)}`);
     }
   }
 

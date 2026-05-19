@@ -1565,6 +1565,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
             runtime={activeRuntime}
             latestError={activeLatestError}
             sseConnected={sseConnected}
+            apiBaseUrl={apiBaseUrl}
           />
           <section className="panel thread-panel">
             <header className="panel__header">

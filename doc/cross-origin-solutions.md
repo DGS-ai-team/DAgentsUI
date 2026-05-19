@@ -79,7 +79,7 @@ flowchart LR
 
 ## 3. 纯 Web（无 Electron）时的推荐做法
 
-当前仓库 **`vite.config.ts` 未内置 `server.proxy`**，即开发时若 `VITE_API_BASE_URL` 指向与页面不同源的后端，**完全依赖后端开启 CORS**。
+当前仓库 **`vite.config.ts` 未内置 `server.proxy`**，即开发时若 `VITE_API_BASE_URL` 指向与页面不同源的后端，**完全依赖后端开启 CORS**。工作台右侧运行状态会显示实际使用的 API 基址，联调时应先确认该地址确实是 DAgents 后端。
 
 ### 3.1 后端开启 CORS（推荐）
 
@@ -90,6 +90,8 @@ flowchart LR
 - SSE 路径需允许 **`text/event-stream`** 及长连接相关头
 
 这是 **生产环境** 与 **纯浏览器部署** 最标准、可审计的做法。
+
+若浏览器能连到目标端口但前端显示 `API 请求失败 (... HTTP 404): Not Found`，通常不是 CORS，而是 `VITE_API_BASE_URL` 指向了错误服务或旧契约服务。此时检查运行状态中的 API 基址，并请求该服务的 `/openapi.json`，确认是否存在 DAgents 需要的 `/v1/sessions` 与 `/v1/streams`。
 
 ### 3.2 开发期：Vite 开发代理（可选）
 

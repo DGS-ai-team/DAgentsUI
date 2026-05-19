@@ -5,8 +5,10 @@ export function RuntimeStatusPanel({
   runtime,
   latestError,
   sseConnected,
+  apiBaseUrl,
 }: RuntimeStatusPanelProps) {
   const errorText = latestError || runtime.errorMessage;
+  const apiBaseText = apiBaseUrl?.trim() || "同源";
 
   return (
     <section className="panel runtime-panel--compact">
@@ -27,6 +29,11 @@ export function RuntimeStatusPanel({
               {sseConnected ? "已连接" : "已断开"}
             </span>
           </div>
+        </div>
+
+        <div className="runtime-api-base" title={apiBaseText}>
+          <span className="runtime-api-base__label">API</span>
+          <span className="runtime-api-base__value">{apiBaseText}</span>
         </div>
 
         {errorText ? <div className="runtime__error">{errorText}</div> : null}

@@ -223,6 +223,7 @@ export interface RuntimeStatusPanelProps {
   runtime: RuntimeState;
   latestError?: string;
   sseConnected: boolean;
+  apiBaseUrl?: string;
 }
 
 // ---------------------------

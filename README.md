@@ -111,6 +111,8 @@ pnpm preview
 2. 在本仓库执行：`pnpm gen:types`
 3. 配置 API 根地址：**Web** 用 **`VITE_API_BASE_URL`**；**Electron** 可用项目根 **`.env`** 的 **`API_BASE_URL`**、**`API_PROXY_PORT`** 及设置页「真实 DAgents API」，优先级见 `src/pages/chatWorkbench/resolveApiBaseUrl.ts`（默认常见 **`http://127.0.0.1:8000`**，以后端实际监听为准）。
 
+工作台右侧「运行状态」会显示当前解析到的 API 基址。若出现 `HTTP 404`、`Not Found` 或会话无法创建，先确认该地址打开的是 DAgents 后端，而不是同端口上的其它 OpenAI-compatible 网关；可用 `GET /openapi.json` 检查标题与路径是否包含 `/v1/sessions`、`/v1/streams`。
+
 更细的契约维护说明见下文 **「API 说明」** 与 **`src/api/README.md`**。
 
 ## API 说明（简版）
