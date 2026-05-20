@@ -49,7 +49,8 @@ export function useToolCallDraftBuffers(
 
   const resetToolCallDraftBuffers = useCallback(() => {
     toolCallDeltaBufferRef.current = {};
-  }, []);
+    setToolCallDraftsBySession({});
+  }, [setToolCallDraftsBySession]);
 
   return {
     getOrCreateToolCallBuffer,

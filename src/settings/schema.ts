@@ -6,7 +6,7 @@ export interface UserSettings {
 }
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
-  showReasoningDetail: true,
+  showReasoningDetail: false,
 };
 
 export function mergeUserSettings(raw: unknown): UserSettings {

@@ -104,8 +104,14 @@ export function applyToolCallDeltaChunks(
     }
     const argDelta = readArgumentDelta(chunk);
     if (argDelta) {
-      slot.argumentParts.push(argDelta);
-      slotChanged = true;
+      const currentArgs = slot.argumentParts.join("");
+      if (!currentArgs || argDelta.startsWith(currentArgs)) {
+        slot.argumentParts = [argDelta];
+        slotChanged = argDelta !== currentArgs;
+      } else if (argDelta !== currentArgs) {
+        slot.argumentParts.push(argDelta);
+        slotChanged = true;
+      }
     }
     if (slotChanged) {
       buffer.set(index, slot);

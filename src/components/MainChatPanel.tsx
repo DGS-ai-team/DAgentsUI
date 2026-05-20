@@ -28,6 +28,10 @@ function normalizeBubbleContent(message: ChatMessage): string {
   return raw;
 }
 
+function isConversationMessage(message: ChatMessage): boolean {
+  return (message.role === "user" || message.role === "assistant") && !message.generatingPending;
+}
+
 function MessageBubble({ message }: { message: ChatMessage }) {
   const hint = ROLE_HINT[message.role];
   const content = normalizeBubbleContent(message);
@@ -206,6 +210,10 @@ export function MainChatPanel({
     () => buildStream(messages, approvals, toolExecutions, toolCallDrafts),
     [messages, approvals, toolExecutions, toolCallDrafts],
   );
+  const conversationMessageCount = useMemo(
+    () => messages.filter(isConversationMessage).length,
+    [messages],
+  );
 
   useEffect(() => {
     const el = streamRef.current;
@@ -250,7 +258,7 @@ export function MainChatPanel({
           {pendingApprovalCount > 0 && (
             <span className="pill pill--warn">{pendingApprovalCount} 待审批</span>
           )}
-          <span className="pill">{messages.length} 条消息</span>
+          <span className="pill">{conversationMessageCount} 条消息</span>
         </div>
       </header>
 

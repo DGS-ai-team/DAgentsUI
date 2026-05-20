@@ -285,6 +285,13 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
       if (index < 0) {
         return { ...prev, [sid]: [...current, item] };
       }
+      const existing = current[index];
+      if (
+        item.status === "running" &&
+        (existing.status === "success" || existing.status === "rejected" || existing.status === "error")
+      ) {
+        return prev;
+      }
       const next = [...current];
       next[index] = item;
       return { ...prev, [sid]: next };
@@ -442,8 +449,8 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
   }, [clearEventSeqMemory, resetToolCallDraftBuffers]);
 
   const bootstrapMainSessionAndSse = useCallback(
-    async (reason: string) => {
-      if (!apiReady || !clientReady || !clientId) {
+    async (reason: string, shouldContinue: () => boolean = () => true) => {
+      if (!apiReady || !clientReady || !clientId || !shouldContinue()) {
         return;
       }
       wbLog("bootstrap:main-session", { reason, effectiveApiBaseUrl: apiBaseUrl, clientId });
@@ -489,6 +496,9 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
         return;
       }
 
+      if (!shouldContinue()) {
+        return;
+      }
       const streamUrl = api.streamAllUrl(clientId);
       wbLog("sse:global:open", { streamUrl, clientId, reason });
       openGlobalSse(streamUrl);
@@ -517,11 +527,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
       effectiveApiBaseUrl: apiBaseUrl,
     });
     let cancelled = false;
-    void bootstrapMainSessionAndSse("initial").then(() => {
-      if (cancelled) {
-        closeGlobalSse();
-      }
-    });
+    void bootstrapMainSessionAndSse("initial", () => !cancelled);
     return () => {
       cancelled = true;
       closeGlobalSse();
@@ -597,6 +603,38 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
           [sid]: [role === "reasoning" ? { ...message, reasoningPhaseActive: true } : message],
         };
       }
+    });
+  };
+
+  const mergeAssistantContentForRequest = (sid: string, requestId: string, content: string) => {
+    const text = content.trim();
+    if (!text) {
+      return;
+    }
+    setMessagesBySession((prev) => {
+      const sessionMessages = prev[sid] ?? [];
+      let index = -1;
+      for (let i = sessionMessages.length - 1; i >= 0; i -= 1) {
+        const m = sessionMessages[i];
+        if (m.sessionId === sid && m.requestId === requestId && m.role === "assistant" && !m.generatingPending) {
+          index = i;
+          break;
+        }
+      }
+      if (index < 0) {
+        return { ...prev, [sid]: [...sessionMessages, createMessage(sid, "assistant", text, requestId)] };
+      }
+      const current = sessionMessages[index];
+      const currentText = current.content.trim();
+      if (currentText === text || currentText.includes(text)) {
+        return prev;
+      }
+      const next = [...sessionMessages];
+      next[index] = {
+        ...current,
+        content: text.startsWith(currentText) ? text : `${current.content}${content}`,
+      };
+      return { ...prev, [sid]: next };
     });
   };
 
@@ -999,7 +1037,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
         const assistantContent = extractAssistantContentFromToolPayload(payload);
         if (assistantContent) {
           removeGeneratingPlaceholder(sid, requestId);
-          appendMessageForSession(sid, createMessage(sid, "assistant", assistantContent, requestId));
+          mergeAssistantContentForRequest(sid, requestId, assistantContent);
         }
         markSessionAgentWorking(sid);
       } else {
@@ -1037,6 +1075,12 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
       wbLog("sse:global:error");
       setSseConnected(false);
     };
+
+    if (es.readyState === EventSource.OPEN) {
+      setSseConnected(true);
+    } else if (es.readyState === EventSource.CLOSED) {
+      setSseConnected(false);
+    }
 
     return () => {
       for (const dispose of removeListeners) {
