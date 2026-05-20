@@ -14,6 +14,10 @@ export interface ApprovalToolBubbleProps {
     toolCallId: string,
     decision: ToolCallDecision,
   ) => Promise<void>;
+  onDecideAll?: (
+    taskId: string,
+    decision: ToolCallDecision,
+  ) => Promise<void>;
 }
 
 function decisionForToolCall(
@@ -200,10 +204,15 @@ export function ApprovalToolBubble({
   runningToolCallIds,
   completedToolCallIds,
   onDecide,
+  onDecideAll,
 }: ApprovalToolBubbleProps) {
   const submittingSet = new Set(submittingToolCallIds ?? []);
   const runningSet = new Set(runningToolCallIds ?? []);
   const completedSet = new Set(completedToolCallIds ?? []);
+  const pendingToolCalls = task.payload.args.tool_calls.filter(
+    (toolCall) => !decisionForToolCall(task, toolCall.id) && !completedSet.has(toolCall.id),
+  );
+  const batchSubmitting = pendingToolCalls.some((toolCall) => submittingSet.has(toolCall.id));
 
   return (
     <div className="msg msg--approval">
@@ -212,6 +221,29 @@ export function ApprovalToolBubble({
           <span className="msg__meta-label">tool_call</span>
         </div>
         <div className="approval-bubble">
+          {pendingToolCalls.length > 1 && onDecideAll ? (
+            <div className="approval-bubble__bulk-actions">
+              <span className="approval-bubble__bulk-text">{pendingToolCalls.length} 个工具调用待处理</span>
+              <div className="approval-tool-item__inline-actions">
+                <button
+                  type="button"
+                  className="approval-action-btn approval-action-btn--reject"
+                  disabled={batchSubmitting}
+                  onClick={() => void onDecideAll(task.id, "reject")}
+                >
+                  全部拒绝
+                </button>
+                <button
+                  type="button"
+                  className="approval-action-btn approval-action-btn--approve"
+                  disabled={batchSubmitting}
+                  onClick={() => void onDecideAll(task.id, "approve")}
+                >
+                  {batchSubmitting ? "处理中…" : "全部批准"}
+                </button>
+              </div>
+            </div>
+          ) : null}
           <ul className="approval-tool-list">
             {task.payload.args.tool_calls.map((toolCall) => (
               <ToolCallRow

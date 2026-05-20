@@ -202,6 +202,7 @@ export function MainChatPanel({
   sending,
   onSendMessage,
   onDecideToolCall,
+  onDecideAllToolCalls,
 }: MainChatPanelProps) {
   const [input, setInput] = useState("");
   const streamRef = useRef<HTMLDivElement | null>(null);
@@ -284,6 +285,7 @@ export function MainChatPanel({
                 runningToolCallIds={runningToolCallIds}
                 completedToolCallIds={completedToolCallIds}
                 onDecide={onDecideToolCall}
+                onDecideAll={onDecideAllToolCalls}
               />
             );
           })

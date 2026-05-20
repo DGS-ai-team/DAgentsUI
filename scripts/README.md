@@ -5,6 +5,7 @@
 ## 当前文件
 
 - `generate-openapi-types.mjs`：从 `openapi.json` 生成 `src/api/types.ts`。
+- `check-local-env.mjs`：检查本地后端地址、DAgents API 特征和前端端口占用，供 `pnpm check:local` 使用。
 - `electron-dev.cjs`：开发态启动 Vite（固定端口）后拉起 Electron，供 `pnpm dev:electron` 使用。
 
 ## 使用方式
@@ -13,6 +14,7 @@
 
 ```bash
 pnpm gen:types
+pnpm check:local
 ```
 
 建议先在仓库根目录更新后端契约：

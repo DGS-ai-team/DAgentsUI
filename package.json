@@ -13,6 +13,7 @@
     "typecheck": "tsc -b",
     "build": "pnpm typecheck && vite build && node ./scripts/sync-env-example-to-dist.mjs",
     "check": "pnpm build",
+    "check:local": "node ./scripts/check-local-env.mjs",
     "preview": "vite preview",
     "gen:types": "node ./scripts/generate-openapi-types.mjs ./openapi.json ./src/api/types.ts",
     "check:openapi": "node ./scripts/check-openapi-types.mjs",

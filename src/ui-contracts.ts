@@ -201,6 +201,10 @@ export interface MainChatPanelProps {
     toolCallId: string,
     decision: ToolCallDecision,
   ) => Promise<void>;
+  onDecideAllToolCalls?: (
+    taskId: string,
+    decision: ToolCallDecision,
+  ) => Promise<void>;
   onCancelCurrentTurn?: () => Promise<void>;
 }
 

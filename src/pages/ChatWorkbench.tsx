@@ -1315,6 +1315,113 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     }
   };
 
+  const handleAllToolDecisions = async (taskId: string, decision: ToolCallDecision) => {
+    if (!clientReady || !clientId) {
+      wbLog("toolDecisionAll:skip-client-not-ready");
+      return;
+    }
+    const sid = activeSessionId;
+    if (!sid) {
+      return;
+    }
+    const task = (approvalsBySession[sid] ?? []).find((item) => item.id === taskId);
+    if (!task) {
+      wbLog("toolDecisionAll:task-not-found", { taskId });
+      return;
+    }
+    const pendingToolCalls = task.payload.args.tool_calls;
+    const ids = pendingToolCalls.map((item) => item.id).filter(Boolean);
+    if (ids.length === 0) {
+      return;
+    }
+
+    wbLog("toolDecisionAll:called", { taskId, decision, sessionId: sid, ids });
+    setSubmittingToolCallIdsBySession((prev) => {
+      const current = prev[sid] ?? [];
+      const merged = [...current];
+      for (const id of ids) {
+        if (!merged.includes(id)) {
+          merged.push(id);
+        }
+      }
+      return { ...prev, [sid]: merged };
+    });
+    setLatestErrorBySession((prev) => ({ ...prev, [sid]: undefined }));
+
+    const approved = decision === "approve" ? ids : [];
+    const rejected = decision === "reject" ? ids : [];
+    try {
+      wbLog("toolDecisionAll:resume:start", { taskId, approved, rejected });
+      await api.submitResume(sid, {
+        type: "selection",
+        approved,
+        rejected,
+      }, "frontend", clientId);
+      wbLog("toolDecisionAll:resume:success");
+
+      for (const selectedToolCall of pendingToolCalls) {
+        upsertToolExecutionForSession(sid, {
+          id: `${task.requestId}:${selectedToolCall.id}`,
+          sessionId: sid,
+          requestId: task.requestId,
+          createdAt: Date.now(),
+          toolCallId: selectedToolCall.id,
+          toolName: selectedToolCall.name,
+          arguments: selectedToolCall.arguments,
+          status: decision === "approve" ? "running" : "rejected",
+          summary: buildToolExecutionSummary(
+            selectedToolCall.name,
+            decision === "approve" ? "running" : "rejected",
+          ),
+          detail: decision === "approve" ? undefined : "该工具调用已被用户拒绝。",
+          finishedAt: decision === "approve" ? undefined : Date.now(),
+        });
+      }
+
+      setApprovalsBySession((prev) => ({
+        ...prev,
+        [sid]: (prev[sid] ?? []).filter((item) => item.id !== taskId),
+      }));
+      if (decision === "approve") {
+        setRunningToolCallIdsBySession((prev) => {
+          const current = prev[sid] ?? [];
+          const merged = [...current];
+          for (const id of ids) {
+            if (!merged.includes(id)) {
+              merged.push(id);
+            }
+          }
+          return { ...prev, [sid]: merged };
+        });
+      } else {
+        setRunningToolCallIdsBySession((prev) => ({
+          ...prev,
+          [sid]: (prev[sid] ?? []).filter((id) => !ids.includes(id)),
+        }));
+      }
+      setSubmittingToolCallIdsBySession((prev) => ({
+        ...prev,
+        [sid]: (prev[sid] ?? []).filter((id) => !ids.includes(id)),
+      }));
+      setRuntimeBySession((prev) => ({
+        ...prev,
+        [sid]: { ...(prev[sid] ?? defaultRuntimeModel), status: "running" },
+      }));
+    } catch (error) {
+      const message = String(error);
+      wbLog("toolDecisionAll:resume:error", { taskId, error: message });
+      setSubmittingToolCallIdsBySession((prev) => ({
+        ...prev,
+        [sid]: (prev[sid] ?? []).filter((id) => !ids.includes(id)),
+      }));
+      setLatestErrorBySession((prev) => ({ ...prev, [sid]: message }));
+      setRuntimeBySession((prev) => ({
+        ...prev,
+        [sid]: { ...(prev[sid] ?? defaultRuntimeModel), status: "error", errorMessage: message },
+      }));
+    }
+  };
+
   return (
     <div className="app">
       <header className="app__header">
@@ -1354,6 +1461,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
             sending={activeSending}
             onSendMessage={handleSendMessage}
             onDecideToolCall={handleToolDecision}
+            onDecideAllToolCalls={handleAllToolDecisions}
             disabled={!activeSessionId}
           />
         </main>

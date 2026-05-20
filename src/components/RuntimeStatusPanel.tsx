@@ -9,6 +9,11 @@ export function RuntimeStatusPanel({
 }: RuntimeStatusPanelProps) {
   const errorText = latestError || runtime.errorMessage;
   const apiBaseText = apiBaseUrl?.trim() || "同源";
+  const apiHint = !sseConnected
+    ? `未收到实时事件。请确认后端正在运行，且浏览器可访问 ${apiBaseText}。`
+    : errorText
+      ? "请求失败时可先检查后端地址、服务端口和 CORS/代理配置。"
+      : "连接正常。";
 
   return (
     <section className="panel runtime-panel--compact">
@@ -34,6 +39,9 @@ export function RuntimeStatusPanel({
         <div className="runtime-api-base" title={apiBaseText}>
           <span className="runtime-api-base__label">API</span>
           <span className="runtime-api-base__value">{apiBaseText}</span>
+        </div>
+        <div className={`runtime__hint ${sseConnected && !errorText ? "runtime__hint--ok" : ""}`}>
+          {apiHint}
         </div>
 
         {errorText ? <div className="runtime__error">{errorText}</div> : null}
