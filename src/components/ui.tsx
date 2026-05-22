@@ -6,6 +6,7 @@ type StatusKind = "running" | "success" | "error" | "warn" | "idle";
 
 const SUB_AGENT_STATUS_MAP: Record<SubAgentStatus, { kind: StatusKind; label: string }> = {
   running: { kind: "running", label: "running" },
+  requires_input: { kind: "warn", label: "approval" },
   success: { kind: "success", label: "success" },
   error: { kind: "error", label: "error" },
   timeout: { kind: "warn", label: "timeout" },

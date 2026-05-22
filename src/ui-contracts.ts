@@ -20,7 +20,9 @@ export type RequestStatus = "idle" | "queued" | "running" | "done" | "error" | "
 
 export type ApprovalDecision = "approve_all" | "reject_all" | "selective";
 
-export type SubAgentStatus = "running" | "success" | "error" | "timeout" | "cancelled";
+export type SubAgentStatus = "running" | "requires_input" | "success" | "error" | "timeout" | "cancelled";
+
+export type SubAgentSource = "local_subagent" | "remote_a2a_agent";
 
 export interface UiMeta {
   sessionId: string;
@@ -130,11 +132,16 @@ export interface SubAgentThread extends UiMeta {
   parentRequestId: string;
   agentId: string;
   title?: string;
+  source?: SubAgentSource;
   status: SubAgentStatus;
   chunks: SubAgentChunk[];
   startedAt: number;
   endedAt?: number;
   errorMessage?: string;
+  targetSessionId?: string;
+  deliveryMode?: string;
+  finalState?: string;
+  traceId?: string;
 }
 
 export interface SubTaskSummary {

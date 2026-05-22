@@ -9,6 +9,10 @@ function IconThread() {
   );
 }
 
+function sourceLabel(source: string | undefined): string {
+  return source === "remote_a2a_agent" ? "A2A" : "子 Agent";
+}
+
 export function SubAgentThreadTabs({
   threads,
   activeThreadId,
@@ -31,6 +35,9 @@ export function SubAgentThreadTabs({
           >
             <IconThread />
             <span>{thread.title || thread.agentId}</span>
+            <span className={`thread-source thread-source--${thread.source ?? "local_subagent"}`}>
+              {sourceLabel(thread.source)}
+            </span>
             <SubAgentStatusPill status={thread.status} />
           </button>
         );

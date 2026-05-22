@@ -11,6 +11,7 @@
     "dev:web": "vite",
     "dev:electron": "node ./scripts/electron-dev.cjs",
     "typecheck": "tsc -b",
+    "test": "node ./scripts/test-a2a-thread-helpers.cjs && node ./scripts/test-workbench-state-helpers.cjs",
     "build": "pnpm typecheck && vite build && node ./scripts/sync-env-example-to-dist.mjs",
     "check": "pnpm build",
     "check:local": "node ./scripts/check-local-env.mjs",

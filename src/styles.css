@@ -1837,6 +1837,27 @@ input {
   padding-right: 2px;
 }
 
+.thread-source {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.thread-source--local_subagent {
+  color: var(--color-info);
+  background: var(--color-info-soft);
+}
+
+.thread-source--remote_a2a_agent {
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
 .chunk {
   padding: 8px 10px;
   border-radius: var(--radius-sm);

@@ -9,6 +9,16 @@ import { omitSessionKey } from "../utils/omitSessionKey";
 import { normalizeToolDisplayType } from "../utils/displayType";
 import { buildToolExecutionSummary, createMessage } from "./chatWorkbench/messageHelpers";
 import {
+  appendUniqueId,
+  appendUniqueIds,
+  createApprovalTaskFromPayload,
+  removeIds,
+  upsertApprovalTask,
+  upsertToolExecutionRecord,
+  upsertToolResultExecutionRecord,
+  usageRuntimeState,
+} from "./chatWorkbench/workbenchStateHelpers";
+import {
   buildSessionHistory,
   DEFAULT_SESSION_ID,
   getSessionDisplayTitle,
@@ -22,6 +32,10 @@ import {
   isTerminalTurnFinishReason,
   parseFinishReason,
 } from "../utils/toolCallStream";
+import {
+  buildA2ARemoteThreadUpdates,
+  isThreadTerminal,
+} from "./chatWorkbench/a2aThreadHelpers";
 import {
   parseWorkbenchSseEnvelope,
   workbenchSseEventTypes,
@@ -281,20 +295,8 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
   const upsertToolExecutionForSession = (sid: string, item: ToolExecutionRecord) => {
     setToolExecutionsBySession((prev) => {
       const current = prev[sid] ?? [];
-      const index = current.findIndex((row) => row.id === item.id);
-      if (index < 0) {
-        return { ...prev, [sid]: [...current, item] };
-      }
-      const existing = current[index];
-      if (
-        item.status === "running" &&
-        (existing.status === "success" || existing.status === "rejected" || existing.status === "error")
-      ) {
-        return prev;
-      }
-      const next = [...current];
-      next[index] = item;
-      return { ...prev, [sid]: next };
+      const next = upsertToolExecutionRecord(current, item);
+      return next === current ? prev : { ...prev, [sid]: next };
     });
   };
 
@@ -327,16 +329,72 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
 
       if (runningIds.length > 0) {
         pendingToolCallArgsBySessionRef.current[sid] = bucket;
-        setRunningToolCallIdsBySession((prev) => {
-          const current = prev[sid] ?? [];
-          const merged = [...current];
-          for (const id of runningIds) {
-            if (!merged.includes(id)) {
-              merged.push(id);
-            }
+        setRunningToolCallIdsBySession((prev) => ({
+          ...prev,
+          [sid]: appendUniqueIds(prev[sid] ?? [], runningIds),
+        }));
+      }
+    },
+    [],
+  );
+
+  const upsertA2ARemoteThreadsForToolResult = useCallback(
+    (sid: string, requestId: string, toolCallId: string, toolName: string, resultContent: string) => {
+      const updates = buildA2ARemoteThreadUpdates(toolName, toolCallId, resultContent);
+      if (updates.length === 0) {
+        return;
+      }
+      const now = Date.now();
+      setThreadsBySession((prev) => {
+        const current = prev[sid] ?? [];
+        const next = [...current];
+        for (const update of updates) {
+          const idx = next.findIndex((item) => item.id === update.threadId);
+          if (idx < 0) {
+            next.push({
+              id: update.threadId,
+              parentRequestId: requestId,
+              sessionId: sid,
+              createdAt: now,
+              updatedAt: now,
+              agentId: update.agentId,
+              title: update.title,
+              source: "remote_a2a_agent",
+              status: update.status,
+              chunks: update.chunks,
+              startedAt: now,
+              endedAt: isThreadTerminal(update.status) ? now : undefined,
+              errorMessage: update.errorMessage,
+              targetSessionId: update.targetSessionId,
+              deliveryMode: update.deliveryMode,
+              finalState: update.finalState,
+              traceId: update.traceId,
+            });
+          } else {
+            const existing = next[idx];
+            const existingChunkIds = new Set(existing.chunks.map((chunk) => chunk.id));
+            const appendedChunks = update.chunks.filter((chunk) => !existingChunkIds.has(chunk.id));
+            next[idx] = {
+              ...existing,
+              updatedAt: now,
+              agentId: update.agentId,
+              title: update.title,
+              source: "remote_a2a_agent",
+              status: update.status,
+              chunks: appendedChunks.length > 0 ? [...existing.chunks, ...appendedChunks] : existing.chunks,
+              endedAt: isThreadTerminal(update.status) ? now : existing.endedAt,
+              errorMessage: update.errorMessage ?? existing.errorMessage,
+              targetSessionId: update.targetSessionId ?? existing.targetSessionId,
+              deliveryMode: update.deliveryMode ?? existing.deliveryMode,
+              finalState: update.finalState ?? existing.finalState,
+              traceId: update.traceId ?? existing.traceId,
+            };
           }
-          return { ...prev, [sid]: merged };
-        });
+        }
+        return { ...prev, [sid]: next };
+      });
+      if (sid === activeSessionIdRef.current) {
+        setActiveThreadBySession((prev) => ({ ...prev, [sid]: updates[0].threadId }));
       }
     },
     [],
@@ -747,12 +805,12 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
         } else {
           setRunningToolCallIdsBySession((prev) => ({
             ...prev,
-            [sid]: (prev[sid] ?? []).filter((id) => id !== toolCallId),
+            [sid]: removeIds(prev[sid] ?? [], [toolCallId]),
           }));
-          setCompletedToolCallIdsBySession((prev) => {
-            const current = prev[sid] ?? [];
-            return { ...prev, [sid]: current.includes(toolCallId) ? current : [...current, toolCallId] };
-          });
+          setCompletedToolCallIdsBySession((prev) => ({
+            ...prev,
+            [sid]: appendUniqueId(prev[sid] ?? [], toolCallId),
+          }));
           const pickedArgs = pickToolArgumentsFromToolResultPayload(payload as Record<string, unknown>);
           const fromPendingSnapshot =
             pendingToolCallArgsBySessionRef.current[sid]?.[toolCallId] ?? {};
@@ -768,118 +826,54 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
               }
             }
           }
-          setToolExecutionsBySession((prev) => {
-            const current = prev[sid] ?? [];
-            const idx = current.findIndex((row) => row.toolCallId === toolCallId);
-            if (idx < 0) {
-              const mergedArguments = { ...fromPendingSnapshot, ...pickedArgs };
-              const created: ToolExecutionRecord = {
-                id: `${requestId}:${toolCallId}`,
-                sessionId: sid,
-                requestId,
-                createdAt: Date.now(),
-                toolCallId,
-                toolName,
-                arguments: mergedArguments,
-                status: rejected ? "rejected" : "success",
-                summary: buildToolExecutionSummary(
-                  toolName,
-                  rejected ? "rejected" : "success",
-                  content,
-                ),
-                resultContent: content,
-                displayType,
-                rawRef,
-                truncated,
-                sensitiveFiltered,
-                detail: JSON.stringify(payload, null, 2),
-                finishedAt: Date.now(),
-              };
-              return { ...prev, [sid]: [...current, created] };
-            } else {
-              const next = [...current];
-              const mergedArguments = {
-                ...fromPendingSnapshot,
-                ...next[idx].arguments,
-                ...pickedArgs,
-              };
-              next[idx] = {
-                ...next[idx],
-                status: rejected ? "rejected" : "success",
-                summary: buildToolExecutionSummary(
-                  next[idx].toolName || toolName,
-                  rejected ? "rejected" : "success",
-                  content,
-                ),
-                resultContent: content,
-                displayType,
-                rawRef,
-                truncated,
-                sensitiveFiltered,
-                detail: JSON.stringify(payload, null, 2),
-                finishedAt: Date.now(),
-                arguments: mergedArguments,
-              };
-              return { ...prev, [sid]: next };
-            }
-          });
+          const now = Date.now();
+          setToolExecutionsBySession((prev) => ({
+            ...prev,
+            [sid]: upsertToolResultExecutionRecord({
+              current: prev[sid] ?? [],
+              sessionId: sid,
+              requestId,
+              toolCallId,
+              toolName,
+              content,
+              rejected,
+              displayType,
+              rawRef,
+              truncated,
+              sensitiveFiltered,
+              payload,
+              fromPendingSnapshot,
+              pickedArgs,
+              now,
+            }),
+          }));
+          upsertA2ARemoteThreadsForToolResult(sid, requestId, toolCallId, toolName, content);
           markSessionAgentWorking(sid);
         }
       } else if (eventType === "approval_required") {
         removeGeneratingPlaceholder(sid, requestId);
         finalizeCollapsedReasoningPhase(sid, requestId);
-        const fromApprovalArgs = (payload.approval_args ?? {}) as { tool_calls?: ToolCallItem[] };
-        const fromNestedArgs = (payload.args ?? {}) as { tool_calls?: ToolCallItem[] };
-        const toolCalls = Array.isArray(fromApprovalArgs.tool_calls)
-          ? fromApprovalArgs.tool_calls
-          : Array.isArray(fromNestedArgs.tool_calls)
-            ? fromNestedArgs.tool_calls
-            : [];
-        if (toolCalls.length === 0) {
+        const approvalTask = createApprovalTaskFromPayload({
+          sessionId: sid,
+          requestId,
+          payload,
+          createdAt: Date.now(),
+        });
+        if (!approvalTask) {
           wbLog("sse:approval_required:skip-empty-tool_calls", { sessionId: sid, payloadKeys: Object.keys(payload) });
           return;
         } else {
-          const idRaw = typeof payload.approval_id === "string" ? payload.approval_id : "";
-          const approvalId = idRaw || `${requestId}-${Date.now()}`;
-          const approvalTask: ApprovalTask = {
-            id: approvalId,
-            sessionId: sid,
-            requestId,
-            createdAt: Date.now(),
-            payload: {
-              message: typeof payload.content === "string" ? payload.content : "工具调用",
-              description: typeof payload.description === "string" ? payload.description : "",
-              args: { tool_calls: toolCalls },
-            },
-            handled: false,
-          };
-          setApprovalsBySession((prev) => {
-            const current = prev[sid] ?? [];
-            const exists = current.some((item) => item.id === approvalTask.id);
-            return {
-              ...prev,
-              [sid]: exists
-                ? current.map((item) => (item.id === approvalTask.id ? approvalTask : item))
-                : [...current, approvalTask],
-            };
-          });
+          setApprovalsBySession((prev) => ({
+            ...prev,
+            [sid]: upsertApprovalTask(prev[sid] ?? [], approvalTask),
+          }));
           markSessionAgentWorking(sid);
         }
       } else if (eventType === "usage") {
         finalizeCollapsedReasoningPhase(sid, requestId);
-        const input = Number(payload.prompt_tokens ?? 0);
-        const output = Number(payload.completion_tokens ?? 0);
-        const total = Number(payload.total_tokens ?? input + output);
         setRuntimeBySession((prev) => ({
           ...prev,
-          [sid]: {
-            ...(prev[sid] ?? defaultRuntimeModel),
-            usage: {
-              inputTokens: Number.isFinite(input) ? input : (prev[sid] ?? defaultRuntimeModel).usage.inputTokens,
-              outputTokens: Number.isFinite(output) ? output : (prev[sid] ?? defaultRuntimeModel).usage.outputTokens,
-              totalTokens: Number.isFinite(total) ? total : (prev[sid] ?? defaultRuntimeModel).usage.totalTokens,
-            },
-          },
+          [sid]: usageRuntimeState({ previous: prev[sid], fallback: defaultRuntimeModel, payload }),
         }));
       } else if (eventType === "error") {
         removeGeneratingPlaceholder(sid, requestId);
@@ -950,6 +944,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
             createdAt: Date.now(),
             agentId: subId,
             title: typeof payload.title === "string" ? payload.title : subId,
+            source: "local_subagent",
             status: "running",
             chunks: [],
             startedAt: Date.now(),
@@ -1099,6 +1094,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     markSessionAgentWorking,
     registerRunningToolCallsForSession,
     syncToolCallDraftsForRequest,
+    upsertA2ARemoteThreadsForToolResult,
   ]);
 
   /** 创建新会话并切换到该会话。 */
@@ -1204,7 +1200,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     wbLog("toolDecision:called", { taskId, toolCallId, decision, sessionId: sid });
     setSubmittingToolCallIdsBySession((prev) => {
       const current = prev[sid] ?? [];
-      return { ...prev, [sid]: current.includes(toolCallId) ? current : [...current, toolCallId] };
+      return { ...prev, [sid]: appendUniqueId(current, toolCallId) };
     });
     setLatestErrorBySession((prev) => ({ ...prev, [sid]: undefined }));
 
@@ -1213,7 +1209,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
       wbLog("toolDecision:task-not-found", { taskId, toolCallId });
       setSubmittingToolCallIdsBySession((prev) => ({
         ...prev,
-        [sid]: (prev[sid] ?? []).filter((id) => id !== toolCallId),
+        [sid]: removeIds(prev[sid] ?? [], [toolCallId]),
       }));
       return;
     } else {
@@ -1282,18 +1278,18 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
         if (decision === "approve") {
           setRunningToolCallIdsBySession((prev) => {
             const current = prev[sid] ?? [];
-            return { ...prev, [sid]: current.includes(toolCallId) ? current : [...current, toolCallId] };
+            return { ...prev, [sid]: appendUniqueId(current, toolCallId) };
           });
         } else {
           setRunningToolCallIdsBySession((prev) => ({
             ...prev,
-            [sid]: (prev[sid] ?? []).filter((id) => id !== toolCallId),
+            [sid]: removeIds(prev[sid] ?? [], [toolCallId]),
           }));
         }
 
         setSubmittingToolCallIdsBySession((prev) => ({
           ...prev,
-          [sid]: (prev[sid] ?? []).filter((id) => id !== toolCallId),
+          [sid]: removeIds(prev[sid] ?? [], [toolCallId]),
         }));
         setRuntimeBySession((prev) => ({
           ...prev,
@@ -1304,7 +1300,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
         wbLog("toolDecision:resume:error", { taskId, toolCallId, error: message });
         setSubmittingToolCallIdsBySession((prev) => ({
           ...prev,
-          [sid]: (prev[sid] ?? []).filter((id) => id !== toolCallId),
+          [sid]: removeIds(prev[sid] ?? [], [toolCallId]),
         }));
         setLatestErrorBySession((prev) => ({ ...prev, [sid]: message }));
         setRuntimeBySession((prev) => ({
@@ -1336,16 +1332,10 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
     }
 
     wbLog("toolDecisionAll:called", { taskId, decision, sessionId: sid, ids });
-    setSubmittingToolCallIdsBySession((prev) => {
-      const current = prev[sid] ?? [];
-      const merged = [...current];
-      for (const id of ids) {
-        if (!merged.includes(id)) {
-          merged.push(id);
-        }
-      }
-      return { ...prev, [sid]: merged };
-    });
+    setSubmittingToolCallIdsBySession((prev) => ({
+      ...prev,
+      [sid]: appendUniqueIds(prev[sid] ?? [], ids),
+    }));
     setLatestErrorBySession((prev) => ({ ...prev, [sid]: undefined }));
 
     const approved = decision === "approve" ? ids : [];
@@ -1383,25 +1373,19 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
         [sid]: (prev[sid] ?? []).filter((item) => item.id !== taskId),
       }));
       if (decision === "approve") {
-        setRunningToolCallIdsBySession((prev) => {
-          const current = prev[sid] ?? [];
-          const merged = [...current];
-          for (const id of ids) {
-            if (!merged.includes(id)) {
-              merged.push(id);
-            }
-          }
-          return { ...prev, [sid]: merged };
-        });
+        setRunningToolCallIdsBySession((prev) => ({
+          ...prev,
+          [sid]: appendUniqueIds(prev[sid] ?? [], ids),
+        }));
       } else {
         setRunningToolCallIdsBySession((prev) => ({
           ...prev,
-          [sid]: (prev[sid] ?? []).filter((id) => !ids.includes(id)),
+          [sid]: removeIds(prev[sid] ?? [], ids),
         }));
       }
       setSubmittingToolCallIdsBySession((prev) => ({
         ...prev,
-        [sid]: (prev[sid] ?? []).filter((id) => !ids.includes(id)),
+        [sid]: removeIds(prev[sid] ?? [], ids),
       }));
       setRuntimeBySession((prev) => ({
         ...prev,
@@ -1412,7 +1396,7 @@ export function ChatWorkbench({ onOpenSettings }: { onOpenSettings?: () => void 
       wbLog("toolDecisionAll:resume:error", { taskId, error: message });
       setSubmittingToolCallIdsBySession((prev) => ({
         ...prev,
-        [sid]: (prev[sid] ?? []).filter((id) => !ids.includes(id)),
+        [sid]: removeIds(prev[sid] ?? [], ids),
       }));
       setLatestErrorBySession((prev) => ({ ...prev, [sid]: message }));
       setRuntimeBySession((prev) => ({
